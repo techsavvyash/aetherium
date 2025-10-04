@@ -1,0 +1,126 @@
+# Aetherium Configuration
+# Use ${VAR} or $VAR to reference environment variables
+
+server:
+  host: ${SERVER_HOST:-0.0.0.0}
+  port: ${SERVER_PORT:-8080}
+
+task_queue:
+  provider: ${TASK_QUEUE_PROVIDER:-redis}
+  config:
+    redis:
+      url: ${REDIS_URL:-redis://localhost:6379}
+      max_retry: 3
+      queue_name: aetherium:tasks
+    rabbitmq:
+      url: ${RABBITMQ_URL:-amqp://guest:guest@localhost:5672/}
+      exchange: aetherium
+      queue: tasks
+    kafka:
+      brokers:
+        - ${KAFKA_BROKER:-localhost:9092}
+      topic: aetherium-tasks
+      group_id: aetherium-workers
+    memory:
+      buffer_size: 1000
+
+storage:
+  provider: ${STORAGE_PROVIDER:-postgres}
+  config:
+    postgres:
+      url: ${DATABASE_URL:-postgres://aetherium:aetherium@localhost:5432/aetherium?sslmode=disable}
+      max_connections: 100
+      max_idle_connections: 10
+    mysql:
+      url: ${MYSQL_URL:-mysql://aetherium:aetherium@localhost:3306/aetherium}
+      max_connections: 100
+    mongodb:
+      url: ${MONGODB_URL:-mongodb://localhost:27017}
+      database: aetherium
+    dynamodb:
+      region: ${AWS_REGION:-us-east-1}
+      table_prefix: aetherium
+
+logging:
+  provider: ${LOGGING_PROVIDER:-loki}
+  config:
+    loki:
+      url: ${LOKI_URL:-http://localhost:3100}
+      batch_size: 1000
+      batch_wait: 1s
+    elasticsearch:
+      url: ${ELASTICSEARCH_URL:-http://localhost:9200}
+      index_prefix: aetherium
+    cloudwatch:
+      region: ${AWS_REGION:-us-east-1}
+      log_group: /aetherium/logs
+    stdout:
+      format: json  # json | text
+
+vmm:
+  provider: ${VMM_PROVIDER:-firecracker}
+  config:
+    firecracker:
+      kernel_path: ${FIRECRACKER_KERNEL_PATH:-/var/firecracker/vmlinux}
+      socket_dir: ${FIRECRACKER_SOCKET_DIR:-/var/run/firecracker}
+      default_vcpu: 2
+      default_memory_mb: 512
+      jailer_path: /usr/bin/jailer
+    kata:
+      runtime_path: /usr/bin/kata-runtime
+      config_path: /etc/kata-containers/configuration.toml
+    docker:
+      socket: ${DOCKER_HOST:-unix:///var/run/docker.sock}
+      network: aetherium-network
+    qemu:
+      binary_path: /usr/bin/qemu-system-x86_64
+      default_vcpu: 2
+      default_memory_mb: 512
+
+event_bus:
+  provider: ${EVENT_BUS_PROVIDER:-memory}
+  config:
+    memory:
+      buffer_size: 1000
+    redis:
+      url: ${REDIS_URL:-redis://localhost:6379}
+      channel_prefix: aetherium:events
+    nats:
+      url: ${NATS_URL:-nats://localhost:4222}
+      stream: aetherium-events
+    kafka:
+      brokers:
+        - ${KAFKA_BROKER:-localhost:9092}
+      topic: aetherium-events
+
+integrations:
+  enabled:
+    - github
+    # - slack
+    # - discord
+
+  github:
+    token: ${GITHUB_TOKEN}
+    webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+    app_id: ${GITHUB_APP_ID}
+    installation_id: ${GITHUB_INSTALLATION_ID}
+
+  slack:
+    token: ${SLACK_BOT_TOKEN}
+    signing_secret: ${SLACK_SIGNING_SECRET}
+    default_channel: "#aetherium-agents"
+
+  discord:
+    token: ${DISCORD_BOT_TOKEN}
+    guild_id: ${DISCORD_GUILD_ID}
+    default_channel_id: ${DISCORD_CHANNEL_ID}
+
+  linear:
+    api_key: ${LINEAR_API_KEY}
+    team_id: ${LINEAR_TEAM_ID}
+
+  jira:
+    url: ${JIRA_URL}
+    username: ${JIRA_USERNAME}
+    api_token: ${JIRA_API_TOKEN}
+    project_key: ${JIRA_PROJECT_KEY}

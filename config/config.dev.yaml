@@ -1,0 +1,46 @@
+# Development Configuration
+# Override values for local development
+
+server:
+  host: localhost
+  port: 8080
+
+task_queue:
+  provider: memory
+  config:
+    memory:
+      buffer_size: 100
+
+storage:
+  provider: postgres
+  config:
+    postgres:
+      url: postgres://postgres:postgres@localhost:5432/aetherium_dev?sslmode=disable
+      max_connections: 10
+
+logging:
+  provider: stdout
+  config:
+    stdout:
+      format: text
+
+vmm:
+  provider: docker  # Use Docker for local development
+  config:
+    docker:
+      socket: unix:///var/run/docker.sock
+      network: aetherium-dev
+
+event_bus:
+  provider: memory
+  config:
+    memory:
+      buffer_size: 100
+
+integrations:
+  enabled:
+    - github
+
+  github:
+    token: ${GITHUB_TOKEN:-your_dev_token_here}
+    webhook_secret: ${GITHUB_WEBHOOK_SECRET:-dev_secret}
