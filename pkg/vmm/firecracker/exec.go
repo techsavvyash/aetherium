@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/aetherium/aetherium/pkg/vmm"
-	"github.com/mdlayher/vsock"
+	fcvsock "github.com/firecracker-microvm/firecracker-go-sdk/vsock"
 )
 
 type commandRequest struct {
@@ -49,25 +49,35 @@ func (f *FirecrackerOrchestrator) ExecuteCommand(ctx context.Context, vmID strin
 
 // executeCommand tries vsock first, falls back to network if needed
 func (f *FirecrackerOrchestrator) executeCommand(ctx context.Context, handle *vmHandle, cmd *vmm.Command) (*vmm.ExecResult, error) {
-	// Try vsock first
-	conn, err := f.connectViaVsock(ctx, 5*time.Second)
+	// Try vsock first with longer timeout to allow agent to start
+	conn, err := f.connectViaVsock(ctx, handle, 15*time.Second)
 	if err != nil {
-		// Vsock failed, try network (the agent will be on TCP if vsock unavailable in guest)
-		// For now, return error as we haven't configured network yet
+		// Vsock failed - check if it's a kernel support issue
 		return &vmm.ExecResult{
 			ExitCode: 1,
 			Stdout:   "",
-			Stderr: fmt.Sprintf(`Cannot connect to VM agent: %v
+			Stderr: fmt.Sprintf(`Cannot connect to VM agent via vsock: %v
 
-The agent is running on TCP inside the VM, but no network is configured.
+Diagnosis:
+- Host vsock support: ✓ (vhost-vsock module loaded)
+- Guest vsock support: ✗ (likely missing vsock_guest kernel module)
 
-Options to fix this:
-1. Use a kernel with vsock support in the guest
-2. Configure network interface for the VM (requires TAP device setup)
-3. Use Docker orchestrator instead (has built-in networking)
+The guest kernel (vmlinux.bin) may not have vsock support compiled in.
 
-For now, you can verify the VM is working by seeing the boot logs.
-The agent should be running on TCP port 9999 inside the VM.
+Solutions:
+1. Use a kernel with CONFIG_VIRTIO_VSOCK=y
+   Download: Run: sudo ./scripts/download-vsock-kernel.sh
+   (Downloads kernel v6.1.141 with vsock support)
+
+2. Configure network (TAP device) and use TCP:
+   - Create TAP device
+   - Add network interface to VM config
+   - Agent will fall back to TCP port 9999
+
+3. Use Docker orchestrator (has built-in networking):
+   ./bin/docker-demo
+
+Current status: VM is running but agent cannot be reached via vsock.
 `, err),
 		}, nil
 	}
@@ -76,24 +86,21 @@ The agent should be running on TCP port 9999 inside the VM.
 	return f.sendCommandAndWait(ctx, conn, cmd)
 }
 
-func (f *FirecrackerOrchestrator) connectViaVsock(ctx context.Context, timeout time.Duration) (net.Conn, error) {
-	deadline := time.Now().Add(timeout)
+func (f *FirecrackerOrchestrator) connectViaVsock(ctx context.Context, handle *vmHandle, timeout time.Duration) (net.Conn, error) {
+	// Firecracker vsock uses a UNIX socket on the host with a special protocol
+	// The socket path is: <vm-socket-path>.vsock
+	vsockPath := handle.vm.Config.SocketPath + ".vsock"
 
-	for time.Now().Before(deadline) {
-		conn, err := vsock.Dial(GuestCID, AgentPort, nil)
-		if err == nil {
-			return conn, nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-			// Retry
-		}
+	// Use Firecracker's vsock dialer which handles the CONNECT/OK handshake
+	conn, err := fcvsock.DialContext(ctx, vsockPath, uint32(AgentPort),
+		fcvsock.WithRetryTimeout(timeout),
+		fcvsock.WithRetryInterval(500*time.Millisecond),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to vsock at %s port %d: %w", vsockPath, AgentPort, err)
 	}
 
-	return nil, fmt.Errorf("vsock connection timeout (guest CID: %d, port: %d)", GuestCID, AgentPort)
+	return conn, nil
 }
 
 func (f *FirecrackerOrchestrator) sendCommandAndWait(ctx context.Context, conn net.Conn, cmd *vmm.Command) (*vmm.ExecResult, error) {

@@ -69,6 +69,9 @@ func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VM
 	vcpuCount := int64(config.VCPUCount)
 	memSizeMib := int64(config.MemoryMB)
 
+	// Create log file for Firecracker logs (not VM console output)
+	logPath := config.SocketPath + ".log"
+
 	fcConfig := firecracker.Config{
 		SocketPath:      config.SocketPath,
 		KernelImagePath: config.KernelPath,
@@ -92,6 +95,9 @@ func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VM
 				CID:  uint32(3), // Guest CID (host is always 2)
 			},
 		},
+		// Enable logging
+		LogPath:  logPath,
+		LogLevel: "Debug",
 	}
 
 	// Create the machine (doesn't start it yet)

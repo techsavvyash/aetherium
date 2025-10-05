@@ -69,9 +69,10 @@ func main() {
 	}
 	fmt.Println("   ✓ VM started\n")
 
-	// Wait for boot
-	fmt.Println("3. Waiting for VM to boot (15s)...")
-	time.Sleep(15 * time.Second)
+	// Wait for boot and agent startup
+	fmt.Println("3. Waiting for VM to boot and agent to start (20s)...")
+	fmt.Printf("   Logs will be available at: %s.log\n", socketPath)
+	time.Sleep(20 * time.Second)
 	fmt.Println("   ✓ Boot complete\n")
 
 	// Try simple command
@@ -99,6 +100,10 @@ func main() {
 		fmt.Println("\n✓ SUCCESS! Command execution works!")
 	} else {
 		fmt.Println("\n✗ Command execution failed")
+		fmt.Printf("\nTroubleshooting:\n")
+		fmt.Printf("- Check VM logs: cat %s.log\n", socketPath)
+		fmt.Printf("- Check vsock: ./scripts/diagnose-vsock.sh\n")
+		fmt.Printf("- Verify agent in rootfs: sudo mount -o loop /var/firecracker/rootfs.ext4 /mnt && ls -l /mnt/usr/local/bin/fc-agent && sudo umount /mnt\n")
 		os.Exit(1)
 	}
 }
