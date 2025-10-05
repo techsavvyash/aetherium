@@ -1,23 +1,26 @@
 # Aetherium TODO List
 
-## 🚧 In Progress
+## ✅ Completed
 
-- [ ] Debug and fix vsock connection timeout issue
-  - Added diagnostic tools (`diagnose-vsock.sh`, `test-and-diagnose.sh`)
-  - Enabled debug logging in Firecracker orchestrator
-  - Next: Run diagnostics and analyze VM logs to find root cause
+- [x] **Debug and fix vsock connection timeout issue**
+  - Fixed by using Firecracker's native vsock library
+  - Added comprehensive diagnostic tools
+  - Vsock communication working between host and guest
+
+- [x] **Create Redis task queue implementation with Asynq**
+  - Implemented Asynq-based distributed task queue
+  - Defined task types (VM operations, job execution, integrations)
+  - Created task handlers with retry logic and priority queues
+  - Supports concurrent processing with configurable workers
+
+- [x] **Create PostgreSQL state store with migrations**
+  - Designed complete database schema (VMs, Tasks, Jobs, Executions)
+  - Implemented repository pattern with interfaces
+  - Created PostgreSQL implementation with transactions
+  - Migration system with up/down support
+  - Migration CLI tool for database setup
 
 ## 📋 Infrastructure
-
-- [ ] Create Redis task queue implementation with Asynq
-  - Integrate Asynq for distributed task queuing
-  - Define task types and handlers
-  - Set up Redis connection and configuration
-
-- [ ] Create PostgreSQL state store with migrations
-  - Design database schema for VM state, tasks, and jobs
-  - Implement migration system
-  - Create storage interface and PostgreSQL implementation
 
 - [ ] Implement Loki logging backend
   - Set up Loki client and configuration

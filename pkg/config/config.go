@@ -3,228 +3,172 @@ package config
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Config represents the complete application configuration
+// Config holds the application configuration
 type Config struct {
-	Server       ServerConfig              `yaml:"server"`
-	TaskQueue    ProviderConfig            `yaml:"task_queue"`
-	Storage      ProviderConfig            `yaml:"storage"`
-	Logging      ProviderConfig            `yaml:"logging"`
-	VMM          ProviderConfig            `yaml:"vmm"`
-	EventBus     ProviderConfig            `yaml:"event_bus"`
-	Integrations IntegrationsConfig        `yaml:"integrations"`
+	Server   ServerConfig   `yaml:"server"`
+	Database DatabaseConfig `yaml:"database"`
+	Redis    RedisConfig    `yaml:"redis"`
+	Queue    QueueConfig    `yaml:"queue"`
+	VMM      VMMConfig      `yaml:"vmm"`
+	Logging  LoggingConfig  `yaml:"logging"`
 }
 
-// ServerConfig represents HTTP server configuration
+// ServerConfig holds server configuration
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
+	Mode string `yaml:"mode"` // "development" or "production"
 }
 
-// ProviderConfig represents a pluggable component configuration
-type ProviderConfig struct {
-	Provider string                 `yaml:"provider"`
-	Config   map[string]interface{} `yaml:"config"`
+// DatabaseConfig holds database configuration
+type DatabaseConfig struct {
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	User         string `yaml:"user"`
+	Password     string `yaml:"password"`
+	Database     string `yaml:"database"`
+	SSLMode      string `yaml:"sslmode"`
+	MaxOpenConns int    `yaml:"max_open_conns"`
+	MaxIdleConns int    `yaml:"max_idle_conns"`
 }
 
-// IntegrationsConfig represents integrations configuration
-type IntegrationsConfig struct {
-	Enabled []string                      `yaml:"enabled"`
-	Configs map[string]map[string]interface{} `yaml:",inline"`
+// RedisConfig holds Redis configuration
+type RedisConfig struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
 }
 
-// LoadConfig loads configuration from a YAML file
-func LoadConfig(path string) (*Config, error) {
+// QueueConfig holds queue configuration
+type QueueConfig struct {
+	Concurrency int            `yaml:"concurrency"`
+	Queues      map[string]int `yaml:"queues"`
+}
+
+// VMMConfig holds VMM configuration
+type VMMConfig struct {
+	DefaultOrchestrator string            `yaml:"default_orchestrator"` // "firecracker" or "docker"
+	Firecracker         FirecrackerConfig `yaml:"firecracker"`
+	Docker              DockerConfig      `yaml:"docker"`
+}
+
+// FirecrackerConfig holds Firecracker-specific configuration
+type FirecrackerConfig struct {
+	KernelPath      string `yaml:"kernel_path"`
+	RootFSTemplate  string `yaml:"rootfs_template"`
+	SocketDir       string `yaml:"socket_dir"`
+	DefaultVCPU     int    `yaml:"default_vcpu"`
+	DefaultMemoryMB int    `yaml:"default_memory_mb"`
+}
+
+// DockerConfig holds Docker-specific configuration
+type DockerConfig struct {
+	Network string `yaml:"network"`
+}
+
+// LoggingConfig holds logging configuration
+type LoggingConfig struct {
+	Level  string `yaml:"level"` // "debug", "info", "warn", "error"
+	Format string `yaml:"format"` // "json" or "text"
+	Output string `yaml:"output"` // "stdout", "stderr", or file path
+}
+
+// Load loads configuration from a YAML file
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Expand environment variables
-	expanded := expandEnvVars(string(data))
-
 	var config Config
-	if err := yaml.Unmarshal([]byte(expanded), &config); err != nil {
+	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
+	// Apply environment variable overrides
+	config.applyEnvOverrides()
+
+	// Set defaults
+	config.setDefaults()
 
 	return &config, nil
 }
 
-// Validate validates the configuration
-func (c *Config) Validate() error {
-	if c.Server.Port <= 0 || c.Server.Port > 65535 {
-		return fmt.Errorf("invalid server port: %d", c.Server.Port)
+// applyEnvOverrides applies environment variable overrides
+func (c *Config) applyEnvOverrides() {
+	if dbHost := os.Getenv("DB_HOST"); dbHost != "" {
+		c.Database.Host = dbHost
 	}
-
-	if c.TaskQueue.Provider == "" {
-		return fmt.Errorf("task queue provider is required")
+	if dbPass := os.Getenv("DB_PASSWORD"); dbPass != "" {
+		c.Database.Password = dbPass
 	}
-
-	if c.Storage.Provider == "" {
-		return fmt.Errorf("storage provider is required")
+	if redisAddr := os.Getenv("REDIS_ADDR"); redisAddr != "" {
+		c.Redis.Addr = redisAddr
 	}
-
-	if c.Logging.Provider == "" {
-		return fmt.Errorf("logging provider is required")
-	}
-
-	if c.VMM.Provider == "" {
-		return fmt.Errorf("vmm provider is required")
-	}
-
-	if c.EventBus.Provider == "" {
-		return fmt.Errorf("event bus provider is required")
-	}
-
-	return nil
-}
-
-// expandEnvVars expands ${VAR} and $VAR patterns in the config
-func expandEnvVars(s string) string {
-	return os.Expand(s, func(key string) string {
-		return os.Getenv(key)
-	})
-}
-
-// GetString safely retrieves a string value from a config map
-func GetString(config map[string]interface{}, key string) (string, error) {
-	val, exists := config[key]
-	if !exists {
-		return "", fmt.Errorf("key %s not found", key)
-	}
-
-	str, ok := val.(string)
-	if !ok {
-		return "", fmt.Errorf("key %s is not a string", key)
-	}
-
-	return str, nil
-}
-
-// GetInt safely retrieves an int value from a config map
-func GetInt(config map[string]interface{}, key string) (int, error) {
-	val, exists := config[key]
-	if !exists {
-		return 0, fmt.Errorf("key %s not found", key)
-	}
-
-	// Handle both int and float64 (JSON unmarshaling)
-	switch v := val.(type) {
-	case int:
-		return v, nil
-	case int64:
-		return int(v), nil
-	case float64:
-		return int(v), nil
-	default:
-		return 0, fmt.Errorf("key %s is not an integer", key)
+	if redisPass := os.Getenv("REDIS_PASSWORD"); redisPass != "" {
+		c.Redis.Password = redisPass
 	}
 }
 
-// GetBool safely retrieves a bool value from a config map
-func GetBool(config map[string]interface{}, key string) (bool, error) {
-	val, exists := config[key]
-	if !exists {
-		return false, fmt.Errorf("key %s not found", key)
+// setDefaults sets default values if not specified
+func (c *Config) setDefaults() {
+	if c.Server.Host == "" {
+		c.Server.Host = "localhost"
+	}
+	if c.Server.Port == 0 {
+		c.Server.Port = 8080
+	}
+	if c.Server.Mode == "" {
+		c.Server.Mode = "development"
 	}
 
-	b, ok := val.(bool)
-	if !ok {
-		return false, fmt.Errorf("key %s is not a boolean", key)
+	if c.Database.Host == "" {
+		c.Database.Host = "localhost"
+	}
+	if c.Database.Port == 0 {
+		c.Database.Port = 5432
+	}
+	if c.Database.SSLMode == "" {
+		c.Database.SSLMode = "disable"
+	}
+	if c.Database.MaxOpenConns == 0 {
+		c.Database.MaxOpenConns = 25
+	}
+	if c.Database.MaxIdleConns == 0 {
+		c.Database.MaxIdleConns = 5
 	}
 
-	return b, nil
-}
-
-// GetStringOrDefault retrieves a string with a default value
-func GetStringOrDefault(config map[string]interface{}, key, defaultVal string) string {
-	val, err := GetString(config, key)
-	if err != nil {
-		return defaultVal
-	}
-	return val
-}
-
-// GetIntOrDefault retrieves an int with a default value
-func GetIntOrDefault(config map[string]interface{}, key string, defaultVal int) int {
-	val, err := GetInt(config, key)
-	if err != nil {
-		return defaultVal
-	}
-	return val
-}
-
-// GetBoolOrDefault retrieves a bool with a default value
-func GetBoolOrDefault(config map[string]interface{}, key string, defaultVal bool) bool {
-	val, err := GetBool(config, key)
-	if err != nil {
-		return defaultVal
-	}
-	return val
-}
-
-// GetProviderConfig retrieves the configuration for a specific provider
-func (c *Config) GetProviderConfig(providerType, providerName string) (map[string]interface{}, error) {
-	var providerConfig ProviderConfig
-
-	switch strings.ToLower(providerType) {
-	case "task_queue", "queue":
-		providerConfig = c.TaskQueue
-	case "storage", "store":
-		providerConfig = c.Storage
-	case "logging", "logger", "log":
-		providerConfig = c.Logging
-	case "vmm", "vm":
-		providerConfig = c.VMM
-	case "event_bus", "events":
-		providerConfig = c.EventBus
-	default:
-		return nil, fmt.Errorf("unknown provider type: %s", providerType)
+	if c.Redis.Addr == "" {
+		c.Redis.Addr = "localhost:6379"
 	}
 
-	if providerConfig.Provider != providerName {
-		return nil, fmt.Errorf("provider mismatch: expected %s, got %s", providerName, providerConfig.Provider)
+	if c.Queue.Concurrency == 0 {
+		c.Queue.Concurrency = 10
 	}
-
-	if providerConfig.Config == nil {
-		return make(map[string]interface{}), nil
-	}
-
-	// Get provider-specific config
-	if specificConfig, ok := providerConfig.Config[providerName].(map[string]interface{}); ok {
-		return specificConfig, nil
-	}
-
-	return providerConfig.Config, nil
-}
-
-// GetIntegrationConfig retrieves configuration for a specific integration
-func (c *Config) GetIntegrationConfig(name string) (map[string]interface{}, error) {
-	// Check if integration is enabled
-	enabled := false
-	for _, enabled_name := range c.Integrations.Enabled {
-		if enabled_name == name {
-			enabled = true
-			break
+	if c.Queue.Queues == nil {
+		c.Queue.Queues = map[string]int{
+			"critical": 6,
+			"high":     5,
+			"default":  3,
+			"low":      1,
 		}
 	}
 
-	if !enabled {
-		return nil, fmt.Errorf("integration %s is not enabled", name)
+	if c.VMM.DefaultOrchestrator == "" {
+		c.VMM.DefaultOrchestrator = "firecracker"
 	}
 
-	if config, ok := c.Integrations.Configs[name]; ok {
-		return config, nil
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
 	}
-
-	return make(map[string]interface{}), nil
+	if c.Logging.Format == "" {
+		c.Logging.Format = "text"
+	}
+	if c.Logging.Output == "" {
+		c.Logging.Output = "stdout"
+	}
 }
