@@ -72,22 +72,21 @@
 
 ## 🎯 Immediate Next Steps
 
-1. **Fix Vsock Issue**
-   ```bash
-   sudo ./scripts/setup-and-test.sh
-   ./scripts/test-and-diagnose.sh
-   cat /tmp/firecracker-test-vm.sock.log
-   ```
+1. **Test Distributed Task Execution** (Current)
+   - Build simple worker/orchestrator demo
+   - Test VM creation via task queue
+   - Test command execution (git clone, etc.)
+   - Verify full end-to-end flow
 
-2. **Alternative Path (if vsock debugging takes too long)**
-   - Implement TAP device networking for Firecracker VMs
-   - Use TCP fallback in agent
-   - OR focus on Docker orchestrator first (networking works out of the box)
+2. **Build Core Services**
+   - API Gateway for REST/gRPC endpoints
+   - Task Orchestrator for task distribution
+   - Agent Worker for task execution
 
-3. **Once VMM working**
-   - Start with Redis + PostgreSQL infrastructure
-   - Build minimal API Gateway
-   - Implement basic Task Orchestrator
+3. **Add Integrations**
+   - GitHub integration (PR creation, webhooks)
+   - Slack integration (notifications, commands)
+   - Plugin framework for custom integrations
 
 ## 📝 Documentation Tasks
 

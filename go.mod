@@ -2,7 +2,16 @@ module github.com/aetherium/aetherium
 
 go 1.23.0
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	github.com/firecracker-microvm/firecracker-go-sdk v1.0.0
+	github.com/golang-migrate/migrate/v4 v4.19.0
+	github.com/google/uuid v1.6.0
+	github.com/hibiken/asynq v0.25.1
+	github.com/jmoiron/sqlx v1.4.0
+	github.com/lib/pq v1.10.9
+	github.com/mdlayher/vsock v1.2.1
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/PuerkitoBio/purell v1.1.1 // indirect
@@ -13,7 +22,6 @@ require (
 	github.com/containernetworking/cni v1.0.1 // indirect
 	github.com/containernetworking/plugins v1.0.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
-	github.com/firecracker-microvm/firecracker-go-sdk v1.0.0 // indirect
 	github.com/go-openapi/analysis v0.21.2 // indirect
 	github.com/go-openapi/errors v0.20.2 // indirect
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect
@@ -25,18 +33,11 @@ require (
 	github.com/go-openapi/swag v0.21.1 // indirect
 	github.com/go-openapi/validate v0.22.0 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
-	github.com/golang-migrate/migrate/v4 v4.19.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hibiken/asynq v0.25.1 // indirect
-	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
-	github.com/lib/pq v1.10.9 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mdlayher/socket v0.4.1 // indirect
-	github.com/mdlayher/vsock v1.2.1 // indirect
 	github.com/mitchellh/mapstructure v1.4.3 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
