@@ -72,9 +72,19 @@ type DockerConfig struct {
 
 // LoggingConfig holds logging configuration
 type LoggingConfig struct {
-	Level  string `yaml:"level"` // "debug", "info", "warn", "error"
-	Format string `yaml:"format"` // "json" or "text"
-	Output string `yaml:"output"` // "stdout", "stderr", or file path
+	Provider string     `yaml:"provider"` // "stdout", "loki"
+	Level    string     `yaml:"level"`    // "debug", "info", "warn", "error"
+	Format   string     `yaml:"format"`   // "json" or "text"
+	Output   string     `yaml:"output"`   // "stdout", "stderr", or file path
+	Loki     LokiConfig `yaml:"loki"`     // Loki-specific config
+}
+
+// LokiConfig holds Loki logging configuration
+type LokiConfig struct {
+	URL           string            `yaml:"url"`
+	BatchSize     int               `yaml:"batch_size"`
+	BatchInterval string            `yaml:"batch_interval"` // e.g., "5s"
+	Labels        map[string]string `yaml:"labels"`
 }
 
 // Load loads configuration from a YAML file

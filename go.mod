@@ -22,6 +22,8 @@ require (
 	github.com/containernetworking/cni v1.0.1 // indirect
 	github.com/containernetworking/plugins v1.0.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/go-chi/chi/v5 v5.2.3 // indirect
+	github.com/go-chi/cors v1.2.2 // indirect
 	github.com/go-openapi/analysis v0.21.2 // indirect
 	github.com/go-openapi/errors v0.20.2 // indirect
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect

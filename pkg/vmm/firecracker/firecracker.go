@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aetherium/aetherium/pkg/network"
 	"github.com/aetherium/aetherium/pkg/types"
 	"github.com/aetherium/aetherium/pkg/vmm"
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
@@ -14,8 +15,9 @@ import (
 
 // FirecrackerOrchestrator implements vmm.VMOrchestrator using the official Firecracker SDK
 type FirecrackerOrchestrator struct {
-	config *Config
-	vms    map[string]*vmHandle
+	config         *Config
+	vms            map[string]*vmHandle
+	networkManager *network.Manager
 }
 
 // Config represents Firecracker-specific configuration
@@ -42,9 +44,28 @@ func NewFirecrackerOrchestrator(configMap map[string]interface{}) (*FirecrackerO
 		DefaultMemoryMB: configMap["default_memory_mb"].(int),
 	}
 
+	// Create network manager
+	netMgr, err := network.NewManager(network.NetworkConfig{
+		BridgeName:    "aetherium0",
+		BridgeIP:      "172.16.0.1/24",
+		SubnetCIDR:    "172.16.0.0/24",
+		TapPrefix:     "aether-",
+		EnableNAT:     true,
+		HostInterface: "", // Auto-detect
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create network manager: %w", err)
+	}
+
+	// Setup bridge
+	if err := netMgr.SetupBridge(); err != nil {
+		return nil, fmt.Errorf("failed to setup network bridge: %w", err)
+	}
+
 	return &FirecrackerOrchestrator{
-		config: config,
-		vms:    make(map[string]*vmHandle),
+		config:         config,
+		vms:            make(map[string]*vmHandle),
+		networkManager: netMgr,
 	}, nil
 }
 
@@ -69,13 +90,23 @@ func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VM
 	vcpuCount := int64(config.VCPUCount)
 	memSizeMib := int64(config.MemoryMB)
 
+	// Create TAP device for network
+	tapDevice, err := f.networkManager.CreateTAPDevice(config.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TAP device: %w", err)
+	}
+
 	// Create log file for Firecracker logs (not VM console output)
 	logPath := config.SocketPath + ".log"
+
+	// Build kernel args with network configuration
+	kernelArgs := fmt.Sprintf("console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw ip=%s::172.16.0.1:255.255.255.0::eth0:off:8.8.8.8",
+		tapDevice.IPAddress[:len(tapDevice.IPAddress)-3]) // Remove /24 suffix
 
 	fcConfig := firecracker.Config{
 		SocketPath:      config.SocketPath,
 		KernelImagePath: config.KernelPath,
-		KernelArgs:      "console=ttyS0 reboot=k panic=1 pci=off",
+		KernelArgs:      kernelArgs,
 		Drives: []models.Drive{
 			{
 				DriveID:      firecracker.String("rootfs"),
@@ -87,6 +118,15 @@ func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VM
 		MachineCfg: models.MachineConfiguration{
 			VcpuCount:  firecracker.Int64(vcpuCount),
 			MemSizeMib: firecracker.Int64(memSizeMib),
+		},
+		// Add network interface
+		NetworkInterfaces: []firecracker.NetworkInterface{
+			{
+				StaticConfiguration: &firecracker.StaticNetworkConfiguration{
+					MacAddress:  tapDevice.MACAddr,
+					HostDevName: tapDevice.Name,
+				},
+			},
 		},
 		// Add vsock device for agent communication
 		VsockDevices: []firecracker.VsockDevice{
@@ -195,6 +235,12 @@ func (f *FirecrackerOrchestrator) DeleteVM(ctx context.Context, vmID string) err
 		if err := f.StopVM(ctx, vmID, true); err != nil {
 			return fmt.Errorf("failed to stop VM during delete: %w", err)
 		}
+	}
+
+	// Clean up TAP device
+	if err := f.networkManager.DeleteTAPDevice(vmID); err != nil {
+		// Log but don't fail - TAP device might not exist
+		fmt.Printf("Warning: failed to delete TAP device for VM %s: %v\n", vmID, err)
 	}
 
 	// Clean up sockets

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/aetherium/aetherium/pkg/storage"
@@ -23,10 +24,20 @@ func (r *vmRepository) Create(ctx context.Context, vm *storage.VM) error {
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 		)`
 
-	_, err := r.db.ExecContext(ctx, query,
+	// Marshal metadata to JSON
+	var metadataJSON []byte
+	var err error
+	if vm.Metadata != nil {
+		metadataJSON, err = json.Marshal(vm.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+	}
+
+	_, err = r.db.ExecContext(ctx, query,
 		vm.ID, vm.Name, vm.Orchestrator, vm.Status,
 		vm.KernelPath, vm.RootFSPath, vm.SocketPath,
-		vm.VCPUCount, vm.MemoryMB, vm.Metadata,
+		vm.VCPUCount, vm.MemoryMB, metadataJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
@@ -107,11 +118,21 @@ func (r *vmRepository) Update(ctx context.Context, vm *storage.VM) error {
 			started_at = $10, stopped_at = $11, metadata = $12
 		WHERE id = $1`
 
+	// Marshal metadata to JSON
+	var metadataJSON []byte
+	var err error
+	if vm.Metadata != nil {
+		metadataJSON, err = json.Marshal(vm.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+	}
+
 	result, err := r.db.ExecContext(ctx, query,
 		vm.ID, vm.Name, vm.Orchestrator, vm.Status,
 		vm.KernelPath, vm.RootFSPath, vm.SocketPath,
 		vm.VCPUCount, vm.MemoryMB,
-		vm.StartedAt, vm.StoppedAt, vm.Metadata,
+		vm.StartedAt, vm.StoppedAt, metadataJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update VM: %w", err)

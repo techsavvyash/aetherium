@@ -1,0 +1,138 @@
+# Aetherium Production Configuration
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  mode: production
+
+database:
+  host: localhost
+  port: 5432
+  user: aetherium
+  password: ${DB_PASSWORD} # Set via environment variable
+  database: aetherium
+  sslmode: require
+  max_open_conns: 25
+  max_idle_conns: 5
+
+redis:
+  addr: localhost:6379
+  password: ${REDIS_PASSWORD} # Set via environment variable
+  db: 0
+
+queue:
+  concurrency: 20
+  queues:
+    critical: 10
+    high: 7
+    default: 5
+    low: 2
+
+vmm:
+  default_orchestrator: firecracker
+  firecracker:
+    kernel_path: /var/firecracker/vmlinux
+    rootfs_template: /var/firecracker/rootfs.ext4
+    socket_dir: /tmp/aetherium-sockets
+    default_vcpu: 1
+    default_memory_mb: 512
+  docker:
+    network: bridge
+
+logging:
+  provider: loki  # "stdout" or "loki"
+  level: info
+  format: json
+  output: stdout
+  loki:
+    url: http://localhost:3100
+    batch_size: 100
+    batch_interval: 5s
+    labels:
+      service: aetherium
+      environment: production
+
+# Tool installation configuration
+tools:
+  # Default tools installed in ALL VMs
+  default:
+    - git
+    - nodejs@20
+    - bun@latest
+    - claude-code@latest
+
+  # Tool installation timeout
+  timeout: 20m
+
+  # Available tools for per-request installation
+  available:
+    - go@1.23.0
+    - python@3.11
+    - rust@latest
+    - docker@latest
+
+# Event bus configuration
+events:
+  provider: redis  # "memory" or "redis"
+  redis:
+    addr: localhost:6379
+    db: 1
+
+# Integration configurations
+integrations:
+  github:
+    enabled: true
+    token: ${GITHUB_TOKEN}  # Set via environment variable
+    webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+    base_url: https://api.github.com
+
+  slack:
+    enabled: true
+    bot_token: ${SLACK_BOT_TOKEN}
+    signing_secret: ${SLACK_SIGNING_SECRET}
+    base_url: https://slack.com/api
+
+# API Gateway configuration
+api:
+  host: 0.0.0.0
+  port: 8080
+
+  # Authentication
+  auth:
+    jwt_secret: ${JWT_SECRET}
+    api_keys:
+      - ${API_KEY_1}
+      - ${API_KEY_2}
+
+  # CORS
+  cors:
+    allowed_origins:
+      - https://app.aetherium.io
+      - https://dashboard.aetherium.io
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+    burst: 20
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+    port: 9090
+    path: /metrics
+
+  tracing:
+    enabled: true
+    jaeger_endpoint: http://localhost:14268/api/traces
+
+  profiling:
+    enabled: false
+    port: 6060

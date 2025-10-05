@@ -1,141 +1,60 @@
-package main
+package worker
 
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/config"
 	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/queue/asynq"
 	"github.com/aetherium/aetherium/pkg/storage"
-	"github.com/aetherium/aetherium/pkg/storage/postgres"
+	"github.com/aetherium/aetherium/pkg/tools"
 	"github.com/aetherium/aetherium/pkg/types"
 	"github.com/aetherium/aetherium/pkg/vmm"
-	"github.com/aetherium/aetherium/pkg/vmm/firecracker"
 	"github.com/google/uuid"
 )
-
-func main() {
-	configPath := flag.String("config", "config/example.yaml", "Path to config file")
-	flag.Parse()
-
-	// Load config
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Create storage
-	store, err := postgres.NewStore(postgres.Config{
-		Host:         cfg.Database.Host,
-		Port:         cfg.Database.Port,
-		User:         cfg.Database.User,
-		Password:     cfg.Database.Password,
-		Database:     cfg.Database.Database,
-		SSLMode:      cfg.Database.SSLMode,
-		MaxOpenConns: cfg.Database.MaxOpenConns,
-		MaxIdleConns: cfg.Database.MaxIdleConns,
-	})
-	if err != nil {
-		log.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Create task queue
-	taskQueue, err := asynq.NewQueue(asynq.Config{
-		RedisAddr:     cfg.Redis.Addr,
-		RedisPassword: cfg.Redis.Password,
-		RedisDB:       cfg.Redis.DB,
-		Concurrency:   cfg.Queue.Concurrency,
-		Queues:        cfg.Queue.Queues,
-	})
-	if err != nil {
-		log.Fatalf("Failed to create queue: %v", err)
-	}
-
-	// Create VMM orchestrator
-	orchestrator, err := firecracker.NewFirecrackerOrchestrator(map[string]interface{}{
-		"kernel_path":       cfg.VMM.Firecracker.KernelPath,
-		"rootfs_template":   cfg.VMM.Firecracker.RootFSTemplate,
-		"socket_dir":        cfg.VMM.Firecracker.SocketDir,
-		"default_vcpu":      cfg.VMM.Firecracker.DefaultVCPU,
-		"default_memory_mb": cfg.VMM.Firecracker.DefaultMemoryMB,
-	})
-	if err != nil {
-		log.Fatalf("Failed to create orchestrator: %v", err)
-	}
-
-	// Create worker
-	worker := NewWorker(store, orchestrator)
-
-	// Register task handlers
-	if err := taskQueue.RegisterHandler(queue.TaskTypeVMCreate, worker.HandleVMCreate); err != nil {
-		log.Fatalf("Failed to register VM create handler: %v", err)
-	}
-
-	if err := taskQueue.RegisterHandler(queue.TaskTypeVMExecute, worker.HandleVMExecute); err != nil {
-		log.Fatalf("Failed to register VM execute handler: %v", err)
-	}
-
-	if err := taskQueue.RegisterHandler(queue.TaskTypeVMDelete, worker.HandleVMDelete); err != nil {
-		log.Fatalf("Failed to register VM delete handler: %v", err)
-	}
-
-	// Start worker
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		log.Println("Worker starting...")
-		if err := taskQueue.Start(ctx); err != nil {
-			log.Printf("Worker error: %v", err)
-		}
-	}()
-
-	// Wait for interrupt
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	<-sigCh
-	log.Println("Shutting down...")
-	cancel()
-
-	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
-
-	if err := taskQueue.Stop(shutdownCtx); err != nil {
-		log.Printf("Error stopping queue: %v", err)
-	}
-
-	log.Println("Worker stopped")
-}
 
 // Worker handles task execution
 type Worker struct {
 	store        storage.Store
 	orchestrator vmm.VMOrchestrator
+	toolInstaller *tools.Installer
 }
 
-func NewWorker(store storage.Store, orchestrator vmm.VMOrchestrator) *Worker {
+// New creates a new worker
+func New(store storage.Store, orchestrator vmm.VMOrchestrator) *Worker {
 	return &Worker{
-		store:        store,
-		orchestrator: orchestrator,
+		store:         store,
+		orchestrator:  orchestrator,
+		toolInstaller: tools.NewInstaller(orchestrator),
 	}
+}
+
+// RegisterHandlers registers task handlers with the queue
+func (w *Worker) RegisterHandlers(q queue.Queue) error {
+	if err := q.RegisterHandler(queue.TaskTypeVMCreate, w.HandleVMCreate); err != nil {
+		return fmt.Errorf("failed to register VM create handler: %w", err)
+	}
+
+	if err := q.RegisterHandler(queue.TaskTypeVMExecute, w.HandleVMExecute); err != nil {
+		return fmt.Errorf("failed to register VM execute handler: %w", err)
+	}
+
+	if err := q.RegisterHandler(queue.TaskTypeVMDelete, w.HandleVMDelete); err != nil {
+		return fmt.Errorf("failed to register VM delete handler: %w", err)
+	}
+
+	return nil
 }
 
 // VMCreatePayload represents VM creation task payload
 type VMCreatePayload struct {
-	Name     string `json:"name"`
-	VCPUs    int    `json:"vcpus"`
-	MemoryMB int    `json:"memory_mb"`
+	Name            string            `json:"name"`
+	VCPUs           int               `json:"vcpus"`
+	MemoryMB        int               `json:"memory_mb"`
+	AdditionalTools []string          `json:"additional_tools,omitempty"`
+	ToolVersions    map[string]string `json:"tool_versions,omitempty"`
 }
 
 // VMExecutePayload represents command execution task payload
@@ -190,6 +109,41 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 		}, nil
 	}
 
+	// Wait for agent to be ready
+	time.Sleep(5 * time.Second)
+
+	// Install tools
+	log.Printf("Installing tools in VM %s...", vm.ID)
+
+	// Combine default tools with additional tools
+	defaultTools := tools.GetDefaultTools()
+	allTools := append(defaultTools, payload.AdditionalTools...)
+
+	// Remove duplicates
+	toolSet := make(map[string]bool)
+	uniqueTools := []string{}
+	for _, tool := range allTools {
+		if !toolSet[tool] {
+			toolSet[tool] = true
+			uniqueTools = append(uniqueTools, tool)
+		}
+	}
+
+	// Install tools with timeout (20 minutes)
+	if len(uniqueTools) > 0 {
+		toolVersions := payload.ToolVersions
+		if toolVersions == nil {
+			toolVersions = make(map[string]string)
+		}
+
+		if err := w.toolInstaller.InstallToolsWithTimeout(ctx, vm.ID, uniqueTools, toolVersions, 20*time.Minute); err != nil {
+			log.Printf("Warning: Tool installation failed (VM still usable): %v", err)
+			// Don't fail the task, but log the error
+		} else {
+			log.Printf("✓ All tools installed successfully in VM %s", vm.ID)
+		}
+	}
+
 	// Store VM in database
 	vmUUID, _ := uuid.Parse(vm.ID)
 	kernelPath := vmConfig.KernelPath
@@ -214,9 +168,11 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 		log.Printf("Warning: Failed to store VM in database: %v", err)
 	}
 
+	log.Printf("✓ VM created successfully: %s (id=%s)", payload.Name, vm.ID)
+
 	result := map[string]interface{}{
-		"vm_id": vm.ID,
-		"name":  payload.Name,
+		"vm_id":  vm.ID,
+		"name":   payload.Name,
 		"status": "running",
 	}
 
@@ -285,6 +241,13 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 		log.Printf("Warning: Failed to store execution: %v", err)
 	}
 
+	success := execResult.ExitCode == 0
+	if success {
+		log.Printf("✓ Command executed successfully on VM %s", payload.VMID)
+	} else {
+		log.Printf("✗ Command failed on VM %s (exit code: %d)", payload.VMID, execResult.ExitCode)
+	}
+
 	result := map[string]interface{}{
 		"vm_id":     payload.VMID,
 		"exit_code": execResult.ExitCode,
@@ -292,7 +255,6 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 		"stderr":    execResult.Stderr,
 	}
 
-	success := execResult.ExitCode == 0
 	if !success {
 		return &queue.TaskResult{
 			TaskID:    task.ID,
@@ -340,6 +302,8 @@ func (w *Worker) HandleVMDelete(ctx context.Context, task *queue.Task) (*queue.T
 	if err := w.store.VMs().Delete(ctx, vmUUID); err != nil {
 		log.Printf("Warning: Failed to delete VM from database: %v", err)
 	}
+
+	log.Printf("✓ VM deleted: %s", vmID)
 
 	return &queue.TaskResult{
 		TaskID:    task.ID,

@@ -56,14 +56,17 @@ type Project struct {
 
 // VMConfig represents configuration for a VM instance
 type VMConfig struct {
-	ID         string            `json:"id"`
-	KernelPath string            `json:"kernel_path"`
-	RootFSPath string            `json:"rootfs_path"`
-	SocketPath string            `json:"socket_path"`
-	VCPUCount  int               `json:"vcpu_count"`
-	MemoryMB   int               `json:"memory_mb"`
-	Env        map[string]string `json:"env,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	ID              string            `json:"id"`
+	KernelPath      string            `json:"kernel_path"`
+	RootFSPath      string            `json:"rootfs_path"`
+	SocketPath      string            `json:"socket_path"`
+	VCPUCount       int               `json:"vcpu_count"`
+	MemoryMB        int               `json:"memory_mb"`
+	Env             map[string]string `json:"env,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	DefaultTools    []string          `json:"default_tools,omitempty"`    // Tools installed in all VMs (e.g., nodejs, bun, claude-code)
+	AdditionalTools []string          `json:"additional_tools,omitempty"` // Per-request tools (e.g., go, python)
+	ToolVersions    map[string]string `json:"tool_versions,omitempty"`    // Tool version specifications
 }
 
 // VMStatus represents the current state of a VM
