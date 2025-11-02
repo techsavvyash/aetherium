@@ -157,29 +157,31 @@ func (pm *ProxyManager) Reload() error {
 // UpdateWhitelist updates the global whitelist
 func (pm *ProxyManager) UpdateWhitelist(domains []string) error {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
 	pm.config.DefaultDomains = domains
 
 	if !pm.config.Enabled || !pm.running {
+		pm.mu.Unlock()
 		return nil
 	}
 
 	if pm.squidManager != nil {
 		if err := pm.squidManager.UpdateGlobalWhitelist(domains); err != nil {
+			pm.mu.Unlock()
 			return fmt.Errorf("failed to update whitelist: %w", err)
 		}
 	}
+	pm.mu.Unlock()
 
+	// Call Reload() after releasing the lock to avoid deadlock
 	return pm.Reload()
 }
 
 // UpdateVMWhitelist updates whitelist for a specific VM
 func (pm *ProxyManager) UpdateVMWhitelist(vmID, vmName, vmIP string, domains []string) error {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
 
 	if !pm.config.Enabled || !pm.running {
+		pm.mu.Unlock()
 		return nil
 	}
 
@@ -190,10 +192,13 @@ func (pm *ProxyManager) UpdateVMWhitelist(vmID, vmName, vmIP string, domains []s
 			Domains: domains,
 		}
 		if err := pm.squidManager.UpdateVMWhitelist(vmID, vmData); err != nil {
+			pm.mu.Unlock()
 			return fmt.Errorf("failed to update VM whitelist: %w", err)
 		}
 	}
+	pm.mu.Unlock()
 
+	// Call Reload() after releasing the lock to avoid deadlock
 	return pm.Reload()
 }
 

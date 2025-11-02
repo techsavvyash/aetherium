@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -88,10 +89,27 @@ func (sm *SquidManager) Start(ctx context.Context) error {
 	// Wait a moment for Squid to initialize
 	time.Sleep(2 * time.Second)
 
-	// Verify Squid is running
-	if err := sm.Health(); err != nil {
-		sm.Stop()
-		return fmt.Errorf("Squid failed health check after start: %w", err)
+	// Verify Squid process is still running by checking if our cmd.Process is valid
+	// If Squid crashed immediately, the process would be invalid
+	if sm.process == nil || sm.process.Process == nil {
+		sm.pid = 0
+		sm.process = nil
+		return fmt.Errorf("Squid process terminated immediately after start")
+	}
+
+	// On Unix, we can send signal 0 to check if process exists without affecting it
+	// This is more reliable than FindProcess which can return non-nil even for dead processes
+	err := sm.process.Process.Signal(syscall.Signal(0))
+	if err != nil {
+		// Process doesn't exist or we don't have permission to signal it
+		// Cleanup without calling Stop() to avoid deadlock
+		if sm.process != nil {
+			sm.process.Process.Kill()
+			sm.process.Wait()
+		}
+		sm.pid = 0
+		sm.process = nil
+		return fmt.Errorf("Squid process not responding after start: %w", err)
 	}
 
 	return nil
@@ -114,9 +132,23 @@ func (sm *SquidManager) Stop() error {
 		}
 	}
 
-	// Wait for process to exit
+	// Wait for process to exit with timeout
 	if sm.process != nil {
-		sm.process.Wait()
+		done := make(chan error, 1)
+		go func() {
+			done <- sm.process.Wait()
+		}()
+
+		select {
+		case <-done:
+			// Process exited successfully
+		case <-time.After(5 * time.Second):
+			// Timeout - force kill
+			if sm.process != nil && sm.process.Process != nil {
+				sm.process.Process.Kill()
+				sm.process.Wait() // Wait for kill to complete
+			}
+		}
 	}
 
 	sm.pid = 0
@@ -287,14 +319,14 @@ func (sm *SquidManager) Health() error {
 		return fmt.Errorf("Squid is not running")
 	}
 
-	// Check if process is still alive
+	// Check if process is still alive using signal 0 (doesn't actually send a signal)
 	process, err := os.FindProcess(sm.pid)
 	if err != nil {
 		return fmt.Errorf("Squid process not found: %w", err)
 	}
 
-	// Send signal 0 to check if process exists
-	if err := process.Signal(os.Signal(nil)); err != nil {
+	// Send signal 0 to check if process exists without affecting it
+	if err := process.Signal(syscall.Signal(0)); err != nil {
 		return fmt.Errorf("Squid process is not responding: %w", err)
 	}
 
