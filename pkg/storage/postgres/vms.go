@@ -19,9 +19,9 @@ func (r *vmRepository) Create(ctx context.Context, vm *storage.VM) error {
 	query := `
 		INSERT INTO vms (
 			id, name, orchestrator, status, kernel_path, rootfs_path, socket_path,
-			vcpu_count, memory_mb, metadata
+			vcpu_count, memory_mb, worker_id, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 		)`
 
 	// Marshal metadata to JSON
@@ -37,7 +37,7 @@ func (r *vmRepository) Create(ctx context.Context, vm *storage.VM) error {
 	_, err = r.db.ExecContext(ctx, query,
 		vm.ID, vm.Name, vm.Orchestrator, vm.Status,
 		vm.KernelPath, vm.RootFSPath, vm.SocketPath,
-		vm.VCPUCount, vm.MemoryMB, metadataJSON,
+		vm.VCPUCount, vm.MemoryMB, vm.WorkerID, metadataJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
@@ -90,6 +90,12 @@ func (r *vmRepository) List(ctx context.Context, filters map[string]interface{})
 	if status, ok := filters["status"].(string); ok {
 		query += fmt.Sprintf(" AND status = $%d", argIndex)
 		args = append(args, status)
+		argIndex++
+	}
+
+	if workerID, ok := filters["worker_id"].(string); ok {
+		query += fmt.Sprintf(" AND worker_id = $%d", argIndex)
+		args = append(args, workerID)
 		argIndex++
 	}
 

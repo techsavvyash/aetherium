@@ -9,7 +9,8 @@ echo ""
 ROOTFS_SIZE="${ROOTFS_SIZE:-2G}"
 ROOTFS_PATH="${ROOTFS_PATH:-/var/firecracker/rootfs.ext4}"
 MOUNT_POINT="/tmp/aetherium-rootfs-mount"
-UBUNTU_VERSION="${UBUNTU_VERSION:-22.04}"
+UBUNTU_CODENAME="${UBUNTU_CODENAME:-jammy}"  # Ubuntu 22.04 = jammy
+UBUNTU_VERSION="22.04"  # For display purposes
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
@@ -39,7 +40,7 @@ trap "umount $MOUNT_POINT 2>/dev/null || true; rmdir $MOUNT_POINT 2>/dev/null ||
 
 echo ""
 echo "Step 3: Installing Ubuntu base system..."
-debootstrap --arch=amd64 "$UBUNTU_VERSION" "$MOUNT_POINT" http://archive.ubuntu.com/ubuntu/
+debootstrap --arch=amd64 "$UBUNTU_CODENAME" "$MOUNT_POINT" http://archive.ubuntu.com/ubuntu/
 echo "✓ Ubuntu base system installed"
 
 echo ""
@@ -88,7 +89,8 @@ apt-get install -y \
     net-tools \
     iputils-ping \
     dnsutils \
-    unzip
+    unzip \
+    passwd
 
 # Install Node.js 20.x
 echo "Installing Node.js..."
@@ -129,7 +131,8 @@ EOF
 systemctl enable fc-agent.service
 
 # Configure root password (change this in production!)
-echo "root:aetherium" | chpasswd
+# Note: Password not required for vsock communication, but useful for console access
+echo "root:aetherium" | chpasswd || echo "Warning: chpasswd not available, skipping password setup"
 
 # Configure SSH
 sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config

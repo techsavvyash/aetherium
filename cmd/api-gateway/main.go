@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/aetherium/aetherium/pkg/api"
+	"github.com/aetherium/aetherium/pkg/discovery"
+	"github.com/aetherium/aetherium/pkg/discovery/consul"
 	"github.com/aetherium/aetherium/pkg/events/redis"
 	"github.com/aetherium/aetherium/pkg/integrations"
 	githubIntegration "github.com/aetherium/aetherium/pkg/integrations/github"
@@ -27,10 +30,11 @@ import (
 )
 
 type Server struct {
-	taskService  *service.TaskService
-	integrations *integrations.Registry
-	logger       *loki.LokiLogger
-	eventBus     *redis.RedisEventBus
+	taskService   *service.TaskService
+	workerService *service.WorkerService
+	integrations  *integrations.Registry
+	logger        *loki.LokiLogger
+	eventBus      *redis.RedisEventBus
 }
 
 func main() {
@@ -39,7 +43,7 @@ func main() {
 	// Initialize PostgreSQL store
 	store, err := postgres.NewStore(postgres.Config{
 		Host:         getEnv("POSTGRES_HOST", "localhost"),
-		Port:         5432,
+		Port:         getEnvInt("POSTGRES_PORT", 5432),
 		User:         getEnv("POSTGRES_USER", "aetherium"),
 		Password:     getEnv("POSTGRES_PASSWORD", "aetherium"),
 		Database:     getEnv("POSTGRES_DB", "aetherium"),
@@ -130,12 +134,47 @@ func main() {
 	// Create task service
 	taskService := service.NewTaskService(queue, store)
 
+	// Initialize service discovery (optional)
+	var workerService *service.WorkerService
+	var consulRegistry discovery.ServiceRegistry
+
+	consulAddr := getEnv("CONSUL_ADDR", "")
+	if consulAddr != "" {
+		// Initialize Consul registry
+		consulConfig := &discovery.ConsulConfig{
+			Address:     consulAddr,
+			Datacenter:  getEnv("CONSUL_DATACENTER", "dc1"),
+			Scheme:      getEnv("CONSUL_SCHEME", "http"),
+			ServiceName: getEnv("CONSUL_SERVICE_NAME", "aetherium-worker"),
+			Token:       getEnv("CONSUL_TOKEN", ""),
+		}
+
+		healthCheckConfig := discovery.DefaultHealthCheckConfig()
+
+		reg, err := consul.NewConsulRegistry(consulConfig, healthCheckConfig)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize Consul registry: %v", err)
+			log.Println("Worker service will run without service discovery")
+			workerService = service.NewWorkerService(store, nil)
+		} else {
+			consulRegistry = reg
+			workerService = service.NewWorkerService(store, consulRegistry)
+			log.Printf("✓ Consul registry initialized (address: %s, datacenter: %s)",
+				consulAddr, consulConfig.Datacenter)
+		}
+	} else {
+		workerService = service.NewWorkerService(store, nil)
+		log.Println("Worker service initialized (no Consul configured)")
+		log.Println("  Set CONSUL_ADDR environment variable to enable service discovery")
+	}
+
 	// Create server
 	srv := &Server{
-		taskService:  taskService,
-		integrations: registry,
-		logger:       logger,
-		eventBus:     eventBus,
+		taskService:   taskService,
+		workerService: workerService,
+		integrations:  registry,
+		logger:        logger,
+		eventBus:      eventBus,
 	}
 
 	// Setup router
@@ -158,6 +197,10 @@ func main() {
 		MaxAge:           300,
 	}))
 
+	// Static UI
+	r.Get("/ui", srv.serveUI)
+	r.Get("/", srv.serveUI) // Redirect root to UI
+
 	// Routes
 	r.Route("/api/v1", func(r chi.Router) {
 		// VMs
@@ -167,6 +210,17 @@ func main() {
 		r.Delete("/vms/{id}", srv.deleteVM)
 		r.Post("/vms/{id}/execute", srv.executeCommand)
 		r.Get("/vms/{id}/executions", srv.listExecutions)
+
+		// Workers
+		r.Get("/workers", srv.listWorkers)
+		r.Get("/workers/{id}", srv.getWorker)
+		r.Get("/workers/{id}/vms", srv.getWorkerVMs)
+		r.Post("/workers/{id}/drain", srv.drainWorker)
+		r.Post("/workers/{id}/activate", srv.activateWorker)
+
+		// Cluster
+		r.Get("/cluster/stats", srv.getClusterStats)
+		r.Get("/cluster/distribution", srv.getVMDistribution)
 
 		// Tasks
 		r.Get("/tasks/{id}", srv.getTask)
@@ -214,6 +268,10 @@ func main() {
 }
 
 // Handler functions
+
+func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "web/index.html")
+}
 
 func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 	var req api.CreateVMRequest
@@ -462,6 +520,113 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Worker management handlers
+
+func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
+	// Check for zone filter
+	zone := r.URL.Query().Get("zone")
+
+	var workers []*service.WorkerStats
+	var err error
+
+	if zone != "" {
+		workers, err = s.workerService.ListWorkersByZone(r.Context(), zone)
+	} else {
+		workers, err = s.workerService.ListWorkers(r.Context())
+	}
+
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to list workers", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"workers": workers,
+		"total":   len(workers),
+	})
+}
+
+func (s *Server) getWorker(w http.ResponseWriter, r *http.Request) {
+	workerID := chi.URLParam(r, "id")
+
+	worker, err := s.workerService.GetWorker(r.Context(), workerID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Worker not found", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, worker)
+}
+
+func (s *Server) getWorkerVMs(w http.ResponseWriter, r *http.Request) {
+	workerID := chi.URLParam(r, "id")
+
+	vms, err := s.workerService.GetWorkerVMs(r.Context(), workerID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Failed to get worker VMs", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"worker_id": workerID,
+		"vms":       vms,
+		"total":     len(vms),
+	})
+}
+
+func (s *Server) drainWorker(w http.ResponseWriter, r *http.Request) {
+	workerID := chi.URLParam(r, "id")
+
+	if err := s.workerService.DrainWorker(r.Context(), workerID); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to drain worker", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"worker_id": workerID,
+		"status":    "draining",
+		"message":   "Worker marked as draining. It will stop accepting new tasks.",
+	})
+}
+
+func (s *Server) activateWorker(w http.ResponseWriter, r *http.Request) {
+	workerID := chi.URLParam(r, "id")
+
+	if err := s.workerService.ActivateWorker(r.Context(), workerID); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to activate worker", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"worker_id": workerID,
+		"status":    "active",
+		"message":   "Worker activated. It will resume accepting tasks.",
+	})
+}
+
+func (s *Server) getClusterStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.workerService.GetClusterStats(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get cluster stats", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) getVMDistribution(w http.ResponseWriter, r *http.Request) {
+	distribution, err := s.workerService.GetVMDistribution(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get VM distribution", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"distribution": distribution,
+		"total_workers": len(distribution),
+	})
+}
+
 // Helper functions
 
 func respondJSON(w http.ResponseWriter, code int, data interface{}) {
@@ -486,6 +651,15 @@ func respondError(w http.ResponseWriter, code int, message string, err error) {
 func getEnv(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
+		}
 	}
 	return fallback
 }

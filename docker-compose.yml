@@ -1,0 +1,100 @@
+services:
+  # PostgreSQL database for state storage
+  postgres:
+    image: postgres:15-alpine
+    container_name: aetherium-postgres
+    environment:
+      POSTGRES_USER: aetherium
+      POSTGRES_PASSWORD: aetherium
+      POSTGRES_DB: aetherium
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aetherium"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aetherium
+
+  # Redis for task queue
+  redis:
+    image: redis:7-alpine
+    container_name: aetherium-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aetherium
+
+  # Consul for service discovery
+  consul:
+    image: hashicorp/consul:1.17
+    container_name: aetherium-consul
+    command: agent -dev -ui -client=0.0.0.0
+    ports:
+      - "8500:8500"  # HTTP API & UI
+      - "8600:8600/udp"  # DNS
+    environment:
+      CONSUL_BIND_INTERFACE: eth0
+    volumes:
+      - consul_data:/consul/data
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aetherium
+
+  # Grafana Loki for centralized logging (optional)
+  loki:
+    image: grafana/loki:latest
+    container_name: aetherium-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aetherium
+
+  # Grafana for visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aetherium-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+    networks:
+      - aetherium
+
+networks:
+  aetherium:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  consul_data:
+  loki_data:
+  grafana_data:

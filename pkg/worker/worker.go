@@ -2,11 +2,14 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
+	"sync"
 	"time"
 
+	"github.com/aetherium/aetherium/pkg/discovery"
 	"github.com/aetherium/aetherium/pkg/queue"
 	"github.com/aetherium/aetherium/pkg/storage"
 	"github.com/aetherium/aetherium/pkg/tools"
@@ -17,9 +20,48 @@ import (
 
 // Worker handles task execution
 type Worker struct {
-	store        storage.Store
-	orchestrator vmm.VMOrchestrator
+	// Core dependencies
+	store         storage.Store
+	orchestrator  vmm.VMOrchestrator
 	toolInstaller *tools.Installer
+
+	// Service discovery
+	registry   discovery.ServiceRegistry
+	workerInfo *discovery.WorkerInfo
+
+	// Resource tracking
+	mu               sync.RWMutex
+	runningVMs       map[string]*vmResourceUsage
+	tasksProcessed   int
+
+	// Heartbeat control
+	heartbeatCancel context.CancelFunc
+	heartbeatDone   chan struct{}
+}
+
+// vmResourceUsage tracks resource usage for a VM
+type vmResourceUsage struct {
+	VCPUs    int
+	MemoryMB int64
+}
+
+// Config holds worker configuration
+type Config struct {
+	ID           string
+	Hostname     string
+	Address      string
+	Zone         string
+	Labels       map[string]string
+	Capabilities []string
+
+	// Resource capacity
+	CPUCores int
+	MemoryMB int64
+	DiskGB   int64
+	MaxVMs   int
+
+	// Service discovery (optional)
+	Registry discovery.ServiceRegistry
 }
 
 // New creates a new worker
@@ -28,6 +70,214 @@ func New(store storage.Store, orchestrator vmm.VMOrchestrator) *Worker {
 		store:         store,
 		orchestrator:  orchestrator,
 		toolInstaller: tools.NewInstaller(orchestrator),
+		runningVMs:    make(map[string]*vmResourceUsage),
+	}
+}
+
+// NewWithConfig creates a new worker with configuration and service discovery
+func NewWithConfig(store storage.Store, orchestrator vmm.VMOrchestrator, config *Config) (*Worker, error) {
+	// Set defaults
+	if config.ID == "" {
+		config.ID = uuid.New().String()
+	}
+	if config.Hostname == "" {
+		hostname, _ := os.Hostname()
+		config.Hostname = hostname
+	}
+	if config.CPUCores == 0 {
+		config.CPUCores = runtime.NumCPU()
+	}
+	if config.MaxVMs == 0 {
+		config.MaxVMs = 100
+	}
+
+	worker := &Worker{
+		store:         store,
+		orchestrator:  orchestrator,
+		toolInstaller: tools.NewInstaller(orchestrator),
+		registry:      config.Registry,
+		runningVMs:    make(map[string]*vmResourceUsage),
+		workerInfo: &discovery.WorkerInfo{
+			ID:           config.ID,
+			Hostname:     config.Hostname,
+			Address:      config.Address,
+			Zone:         config.Zone,
+			Labels:       config.Labels,
+			Capabilities: config.Capabilities,
+			Status:       discovery.WorkerStatusActive,
+			StartedAt:    time.Now(),
+			LastSeen:     time.Now(),
+			Resources: discovery.WorkerResources{
+				CPUCores: config.CPUCores,
+				MemoryMB: config.MemoryMB,
+				DiskGB:   config.DiskGB,
+				MaxVMs:   config.MaxVMs,
+			},
+		},
+	}
+
+	return worker, nil
+}
+
+// Register registers the worker with service discovery and database
+func (w *Worker) Register(ctx context.Context) error {
+	// Register with service discovery if configured
+	if w.registry != nil {
+		if err := w.registry.Register(ctx, w.workerInfo); err != nil {
+			return fmt.Errorf("failed to register with service discovery: %w", err)
+		}
+		log.Printf("Worker registered with service discovery: %s", w.workerInfo.ID)
+	}
+
+	// Register in database if worker info exists
+	if w.workerInfo != nil {
+		// Convert to storage.Worker
+		dbWorker := w.workerInfoToStorage(w.workerInfo)
+		if err := w.store.Workers().Create(ctx, dbWorker); err != nil {
+			// If already exists, update instead
+			if err := w.store.Workers().Update(ctx, dbWorker); err != nil {
+				return fmt.Errorf("failed to register worker in database: %w", err)
+			}
+		}
+		log.Printf("Worker registered in database: %s", w.workerInfo.ID)
+	}
+
+	return nil
+}
+
+// StartHeartbeat starts sending periodic heartbeats
+func (w *Worker) StartHeartbeat(interval time.Duration) error {
+	if w.registry == nil {
+		log.Println("Service discovery not configured, skipping heartbeat")
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.heartbeatCancel = cancel
+	w.heartbeatDone = make(chan struct{})
+
+	go func() {
+		defer close(w.heartbeatDone)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := w.sendHeartbeat(context.Background()); err != nil {
+					log.Printf("Heartbeat failed: %v", err)
+				}
+			}
+		}
+	}()
+
+	log.Printf("Heartbeat started (interval: %v)", interval)
+	return nil
+}
+
+// sendHeartbeat sends a heartbeat and updates resource usage
+func (w *Worker) sendHeartbeat(ctx context.Context) error {
+	// Update last seen time
+	w.mu.Lock()
+	w.workerInfo.LastSeen = time.Now()
+
+	// Update resource usage
+	w.workerInfo.Resources.UsedCPUCores = 0
+	w.workerInfo.Resources.UsedMemoryMB = 0
+	w.workerInfo.Resources.VMCount = len(w.runningVMs)
+
+	for _, vm := range w.runningVMs {
+		w.workerInfo.Resources.UsedCPUCores += vm.VCPUs
+		w.workerInfo.Resources.UsedMemoryMB += vm.MemoryMB
+	}
+	w.mu.Unlock()
+
+	// Send heartbeat to service discovery
+	if err := w.registry.Heartbeat(ctx, w.workerInfo.ID); err != nil {
+		return fmt.Errorf("failed to send heartbeat: %w", err)
+	}
+
+	// Update database
+	if err := w.store.Workers().UpdateLastSeen(ctx, w.workerInfo.ID); err != nil {
+		log.Printf("Warning: Failed to update last_seen in database: %v", err)
+	}
+
+	return nil
+}
+
+// Deregister removes the worker from service discovery
+func (w *Worker) Deregister(ctx context.Context) error {
+	// Stop heartbeat
+	if w.heartbeatCancel != nil {
+		w.heartbeatCancel()
+		<-w.heartbeatDone
+		log.Println("Heartbeat stopped")
+	}
+
+	// Deregister from service discovery
+	if w.registry != nil {
+		if err := w.registry.Deregister(ctx, w.workerInfo.ID); err != nil {
+			return fmt.Errorf("failed to deregister from service discovery: %w", err)
+		}
+		log.Printf("Worker deregistered from service discovery: %s", w.workerInfo.ID)
+	}
+
+	// Update status in database
+	if w.workerInfo != nil {
+		if err := w.store.Workers().UpdateStatus(ctx, w.workerInfo.ID, string(discovery.WorkerStatusOffline)); err != nil {
+			log.Printf("Warning: Failed to update worker status in database: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// GetWorkerInfo returns the worker's information
+func (w *Worker) GetWorkerInfo() *discovery.WorkerInfo {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// Return a copy to avoid race conditions
+	info := *w.workerInfo
+	return &info
+}
+
+// Helper: convert WorkerInfo to storage.Worker
+func (w *Worker) workerInfoToStorage(info *discovery.WorkerInfo) *storage.Worker {
+	// Convert capabilities to interface slice
+	capabilities := make([]interface{}, len(info.Capabilities))
+	for i, cap := range info.Capabilities {
+		capabilities[i] = cap
+	}
+
+	// Convert labels to interface map
+	labels := make(map[string]interface{})
+	for k, v := range info.Labels {
+		labels[k] = v
+	}
+
+	return &storage.Worker{
+		ID:           info.ID,
+		Hostname:     info.Hostname,
+		Address:      info.Address,
+		Status:       string(info.Status),
+		LastSeen:     info.LastSeen,
+		StartedAt:    info.StartedAt,
+		Zone:         info.Zone,
+		Labels:       labels,
+		Capabilities: capabilities,
+		CPUCores:     info.Resources.CPUCores,
+		MemoryMB:     info.Resources.MemoryMB,
+		DiskGB:       info.Resources.DiskGB,
+		UsedCPUCores: info.Resources.UsedCPUCores,
+		UsedMemoryMB: info.Resources.UsedMemoryMB,
+		UsedDiskGB:   info.Resources.UsedDiskGB,
+		VMCount:      info.Resources.VMCount,
+		MaxVMs:       info.Resources.MaxVMs,
+		Metadata:     make(map[string]interface{}),
 	}
 }
 
@@ -144,11 +394,26 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 		}
 	}
 
+	// Track VM resources
+	w.mu.Lock()
+	w.runningVMs[vm.ID] = &vmResourceUsage{
+		VCPUs:    payload.VCPUs,
+		MemoryMB: int64(payload.MemoryMB),
+	}
+	w.tasksProcessed++
+	w.mu.Unlock()
+
 	// Store VM in database
 	vmUUID, _ := uuid.Parse(vm.ID)
 	kernelPath := vmConfig.KernelPath
 	rootfsPath := vmConfig.RootFSPath
 	socketPath := vmConfig.SocketPath
+
+	// Prepare worker_id if worker info exists
+	var workerID *string
+	if w.workerInfo != nil {
+		workerID = &w.workerInfo.ID
+	}
 
 	dbVM := &storage.VM{
 		ID:           vmUUID,
@@ -160,12 +425,18 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 		SocketPath:   &socketPath,
 		VCPUCount:    &payload.VCPUs,
 		MemoryMB:     &payload.MemoryMB,
+		WorkerID:     workerID,
 		CreatedAt:    time.Now(),
 		Metadata:     make(map[string]interface{}),
 	}
 
 	if err := w.store.VMs().Create(ctx, dbVM); err != nil {
 		log.Printf("Warning: Failed to store VM in database: %v", err)
+	}
+
+	// Update worker resources in database
+	if w.workerInfo != nil {
+		w.updateWorkerResources(ctx)
 	}
 
 	log.Printf("✓ VM created successfully: %s (id=%s)", payload.Name, vm.ID)
@@ -219,15 +490,17 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 	stdout := execResult.Stdout
 	stderr := execResult.Stderr
 
-	argsJSON, _ := json.Marshal(payload.Args)
-	var argsInterface []interface{}
-	json.Unmarshal(argsJSON, &argsInterface)
+	// Convert args to JSONBArray
+	args := make(storage.JSONBArray, len(payload.Args))
+	for i, arg := range payload.Args {
+		args[i] = arg
+	}
 
 	execution := &storage.Execution{
 		ID:          uuid.New(),
 		VMID:        &vmUUID,
 		Command:     payload.Command,
-		Args:        argsInterface,
+		Args:        args,
 		ExitCode:    &exitCode,
 		Stdout:      &stdout,
 		Stderr:      &stderr,
@@ -297,10 +570,20 @@ func (w *Worker) HandleVMDelete(ctx context.Context, task *queue.Task) (*queue.T
 		}, nil
 	}
 
+	// Untrack VM resources
+	w.mu.Lock()
+	delete(w.runningVMs, vmID)
+	w.mu.Unlock()
+
 	// Delete from database
 	vmUUID, _ := uuid.Parse(vmID)
 	if err := w.store.VMs().Delete(ctx, vmUUID); err != nil {
 		log.Printf("Warning: Failed to delete VM from database: %v", err)
+	}
+
+	// Update worker resources in database
+	if w.workerInfo != nil {
+		w.updateWorkerResources(ctx)
 	}
 
 	log.Printf("✓ VM deleted: %s", vmID)
@@ -312,6 +595,30 @@ func (w *Worker) HandleVMDelete(ctx context.Context, task *queue.Task) (*queue.T
 		Duration:  time.Since(startTime),
 		StartedAt: startTime,
 	}, nil
+}
+
+// updateWorkerResources updates worker resource usage in the database
+func (w *Worker) updateWorkerResources(ctx context.Context) {
+	w.mu.RLock()
+	usedCPU := 0
+	usedMemory := int64(0)
+	vmCount := len(w.runningVMs)
+
+	for _, vm := range w.runningVMs {
+		usedCPU += vm.VCPUs
+		usedMemory += vm.MemoryMB
+	}
+	w.mu.RUnlock()
+
+	resources := map[string]interface{}{
+		"used_cpu_cores": usedCPU,
+		"used_memory_mb": usedMemory,
+		"vm_count":       vmCount,
+	}
+
+	if err := w.store.Workers().UpdateResources(ctx, w.workerInfo.ID, resources); err != nil {
+		log.Printf("Warning: Failed to update worker resources: %v", err)
+	}
 }
 
 func timePtr(t time.Time) *time.Time {

@@ -14,11 +14,13 @@ import (
 
 // Store implements storage.Store using PostgreSQL
 type Store struct {
-	db         *sqlx.DB
-	vms        storage.VMRepository
-	tasks      storage.TaskRepository
-	jobs       storage.JobRepository
-	executions storage.ExecutionRepository
+	db            *sqlx.DB
+	vms           storage.VMRepository
+	tasks         storage.TaskRepository
+	jobs          storage.JobRepository
+	executions    storage.ExecutionRepository
+	workers       storage.WorkerRepository
+	workerMetrics storage.WorkerMetricRepository
 }
 
 // Config holds PostgreSQL configuration
@@ -53,11 +55,13 @@ func NewStore(config Config) (*Store, error) {
 	}
 
 	store := &Store{
-		db:         db,
-		vms:        &vmRepository{db: db},
-		tasks:      &taskRepository{db: db},
-		jobs:       &jobRepository{db: db},
-		executions: &executionRepository{db: db},
+		db:            db,
+		vms:           &vmRepository{db: db},
+		tasks:         &taskRepository{db: db},
+		jobs:          &jobRepository{db: db},
+		executions:    &executionRepository{db: db},
+		workers:       &workerRepository{db: db},
+		workerMetrics: &workerMetricRepository{db: db},
 	}
 
 	return store, nil
@@ -104,6 +108,16 @@ func (s *Store) Jobs() storage.JobRepository {
 // Executions returns the execution repository
 func (s *Store) Executions() storage.ExecutionRepository {
 	return s.executions
+}
+
+// Workers returns the worker repository
+func (s *Store) Workers() storage.WorkerRepository {
+	return s.workers
+}
+
+// WorkerMetrics returns the worker metrics repository
+func (s *Store) WorkerMetrics() storage.WorkerMetricRepository {
+	return s.workerMetrics
 }
 
 // Close closes the database connection

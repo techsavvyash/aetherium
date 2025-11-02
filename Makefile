@@ -15,24 +15,17 @@ help:
 	@echo "  make lint           - Run linters"
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make run-gateway    - Run API Gateway"
-	@echo "  make run-orchestrator - Run Task Orchestrator"
 	@echo "  make run-worker     - Run Agent Worker"
 
 # Build Go services
 go-build:
 	@echo "Building Go services..."
 	@mkdir -p $(BINARY_DIR)
-	$(GO) build -o $(BINARY_DIR)/fc-cli ./cmd/fc-cli
+	$(GO) build -o $(BINARY_DIR)/api-gateway ./cmd/api-gateway
+	$(GO) build -o $(BINARY_DIR)/worker ./cmd/worker
+	$(GO) build -o $(BINARY_DIR)/aether-cli ./cmd/aether-cli
 	$(GO) build -o $(BINARY_DIR)/fc-agent ./cmd/fc-agent
-	$(GO) build -o $(BINARY_DIR)/fc-exec-demo ./cmd/fc-exec-demo
-	$(GO) build -o $(BINARY_DIR)/demo ./cmd/demo
-	$(GO) build -o $(BINARY_DIR)/docker-demo ./cmd/docker-demo
-	$(GO) build -o $(BINARY_DIR)/vm-cli ./cmd/vm-cli
-	$(GO) build -o $(BINARY_DIR)/container-demo ./cmd/container-demo
-	$(GO) build -o $(BINARY_DIR)/firecracker-demo ./cmd/firecracker-demo
-	# $(GO) build -o $(BINARY_DIR)/api-gateway ./cmd/api-gateway
-	# $(GO) build -o $(BINARY_DIR)/orchestrator ./cmd/orchestrator
-	# $(GO) build -o $(BINARY_DIR)/worker ./cmd/worker
+	$(GO) build -o $(BINARY_DIR)/migrate ./cmd/migrate
 
 build: go-build
 	@echo "Build complete!"
@@ -41,11 +34,8 @@ build: go-build
 run-gateway: build
 	./$(BINARY_DIR)/api-gateway
 
-run-orchestrator: build
-	./$(BINARY_DIR)/orchestrator
-
 run-worker: build
-	./$(BINARY_DIR)/worker
+	sudo ./$(BINARY_DIR)/worker
 
 # Testing
 test:

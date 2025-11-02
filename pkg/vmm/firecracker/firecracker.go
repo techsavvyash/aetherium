@@ -141,7 +141,8 @@ func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VM
 	}
 
 	// Create the machine (doesn't start it yet)
-	machine, err := firecracker.NewMachine(ctx, fcConfig)
+	// Use context.Background() so machine lifecycle is not tied to task context
+	machine, err := firecracker.NewMachine(context.Background(), fcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create firecracker machine: %w", err)
 	}
@@ -168,7 +169,9 @@ func (f *FirecrackerOrchestrator) StartVM(ctx context.Context, vmID string) erro
 	handle.vm.Status = types.VMStatusStarting
 
 	// Start the VM using the SDK
-	if err := handle.machine.Start(ctx); err != nil {
+	// Use context.Background() so VM process outlives the creation task
+	// The VM should continue running after the task completes
+	if err := handle.machine.Start(context.Background()); err != nil {
 		handle.vm.Status = types.VMStatusFailed
 		return fmt.Errorf("failed to start VM: %w", err)
 	}
