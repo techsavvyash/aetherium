@@ -69,6 +69,24 @@ func NewFirecrackerOrchestrator(configMap map[string]interface{}) (*FirecrackerO
 	}, nil
 }
 
+// NewFirecrackerOrchestratorWithNetwork creates a new Firecracker orchestrator with a pre-configured network manager
+// This is useful for testing or when you want to use a network manager with custom configuration (e.g., with proxy enabled)
+func NewFirecrackerOrchestratorWithNetwork(configMap map[string]interface{}, netMgr *network.Manager) (*FirecrackerOrchestrator, error) {
+	config := &Config{
+		KernelPath:      configMap["kernel_path"].(string),
+		RootFSTemplate:  configMap["rootfs_template"].(string),
+		SocketDir:       configMap["socket_dir"].(string),
+		DefaultVCPU:     configMap["default_vcpu"].(int),
+		DefaultMemoryMB: configMap["default_memory_mb"].(int),
+	}
+
+	return &FirecrackerOrchestrator{
+		config:         config,
+		vms:            make(map[string]*vmHandle),
+		networkManager: netMgr,
+	}, nil
+}
+
 // CreateVM creates a new Firecracker VM
 func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VMConfig) (*types.VM, error) {
 	// Validate that kernel and rootfs exist

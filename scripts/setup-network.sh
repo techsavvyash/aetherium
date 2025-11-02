@@ -3,12 +3,40 @@
 
 set -e
 
+# Parse arguments
+ENABLE_PROXY=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --with-proxy)
+            ENABLE_PROXY=true
+            shift
+            ;;
+        --help)
+            echo "Usage: $0 [--with-proxy]"
+            echo ""
+            echo "Options:"
+            echo "  --with-proxy    Enable transparent proxy redirect rules (requires Squid)"
+            echo "  --help          Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Run '$0 --help' for usage"
+            exit 1
+            ;;
+    esac
+done
+
 echo "=== Setting up Aetherium network infrastructure ==="
 
 # Bridge configuration
 BRIDGE_NAME="aetherium0"
 BRIDGE_IP="172.16.0.1/24"
 SUBNET_CIDR="172.16.0.0/24"
+
+# Proxy configuration
+PROXY_HTTP_PORT=3128
+PROXY_HTTPS_PORT=3129
 
 # Detect default interface for NAT
 DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
@@ -70,9 +98,45 @@ else
     echo "✓ Forward rule (outbound) already exists"
 fi
 
+# Setup transparent proxy redirect rules (optional)
+if [ "$ENABLE_PROXY" = true ]; then
+    echo ""
+    echo "=== Setting up transparent proxy redirect rules ==="
+
+    # HTTP redirect (port 80 -> 3128)
+    echo "Setting up HTTP redirect (port 80 -> $PROXY_HTTP_PORT)..."
+    if ! iptables -t nat -C PREROUTING -i $BRIDGE_NAME -p tcp --dport 80 -j REDIRECT --to-port $PROXY_HTTP_PORT 2>/dev/null; then
+        iptables -t nat -A PREROUTING -i $BRIDGE_NAME -p tcp --dport 80 -j REDIRECT --to-port $PROXY_HTTP_PORT
+        echo "✓ HTTP redirect rule added"
+    else
+        echo "✓ HTTP redirect rule already exists"
+    fi
+
+    # HTTPS redirect (port 443 -> 3129)
+    echo "Setting up HTTPS redirect (port 443 -> $PROXY_HTTPS_PORT)..."
+    if ! iptables -t nat -C PREROUTING -i $BRIDGE_NAME -p tcp --dport 443 -j REDIRECT --to-port $PROXY_HTTPS_PORT 2>/dev/null; then
+        iptables -t nat -A PREROUTING -i $BRIDGE_NAME -p tcp --dport 443 -j REDIRECT --to-port $PROXY_HTTPS_PORT
+        echo "✓ HTTPS redirect rule added"
+    else
+        echo "✓ HTTPS redirect rule already exists"
+    fi
+
+    echo ""
+    echo "=== Transparent proxy setup complete ==="
+    echo "HTTP traffic (port 80) -> $BRIDGE_IP:$PROXY_HTTP_PORT"
+    echo "HTTPS traffic (port 443) -> $BRIDGE_IP:$PROXY_HTTPS_PORT"
+    echo ""
+    echo "Note: Ensure Squid proxy is running and configured for transparent interception."
+    echo "Run: sudo ./scripts/setup-squid.sh"
+    echo "Run: sudo ./scripts/generate-ssl-certs.sh"
+fi
+
 echo ""
 echo "=== Network setup complete ==="
 echo "Bridge: $BRIDGE_NAME ($BRIDGE_IP)"
 echo "NAT: $SUBNET_CIDR -> $DEFAULT_IFACE"
+if [ "$ENABLE_PROXY" = true ]; then
+    echo "Proxy: Transparent interception enabled"
+fi
 echo ""
 echo "You can now start the worker to create VMs with network connectivity."

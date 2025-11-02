@@ -1,0 +1,94 @@
+# Aetherium Transparent Proxy Configuration
+# Auto-generated - Do not edit manually
+
+# Transparent interception ports
+http_port {{.BridgeIP}}:{{.Port}} intercept
+https_port {{.BridgeIP}}:{{.HTTPSPort}} intercept ssl-bump \
+    cert=/etc/squid/certs/aetherium-ca.pem \
+    key=/etc/squid/certs/aetherium-ca-key.pem \
+    generate-host-certificates=on
+
+# SSL Bump configuration for HTTPS inspection
+sslcrtd_program /usr/lib/squid/security_file_certgen -s /var/lib/squid/ssl_db -M 4MB
+sslcrtd_children 5
+ssl_bump server-first all
+sslproxy_cert_error allow all
+sslproxy_flags DONT_VERIFY_PEER
+
+# ACL Definitions
+acl aetherium_vms src {{.SubnetCIDR}}
+acl SSL_ports port 443
+acl Safe_ports port 80        # http
+acl Safe_ports port 443       # https
+acl CONNECT method CONNECT
+
+# Global whitelist domains
+{{range .GlobalDomains}}
+acl whitelist_domains dstdomain .{{.}}
+{{end}}
+
+# Per-VM whitelists
+{{range $vmID, $vmData := .VMWhitelists}}
+# VM: {{$vmData.Name}} ({{$vmData.IP}})
+acl vm_{{$vmID}} src {{$vmData.IP}}
+{{range $vmData.Domains}}
+acl vm_{{$vmID}}_domains dstdomain .{{.}}
+{{end}}
+{{end}}
+
+# Deny CONNECT to other than secure SSL ports
+http_access deny CONNECT !SSL_ports
+
+# Deny requests to unknown ports
+http_access deny !Safe_ports
+
+# Access control rules
+http_access allow localhost manager
+http_access deny manager
+
+# Allow VM traffic that matches whitelist
+http_access allow aetherium_vms whitelist_domains
+
+# Allow per-VM whitelist access
+{{range $vmID, $vmData := .VMWhitelists}}
+http_access allow vm_{{$vmID}} vm_{{$vmID}}_domains
+{{end}}
+
+# Deny all other requests
+http_access deny all
+
+# Caching configuration
+cache_dir ufs {{.CacheDir}} {{.CacheSizeMB}} 16 256
+maximum_object_size 512 MB
+cache_mem 256 MB
+cache_replacement_policy heap LFUDA
+memory_replacement_policy heap GDSF
+
+# Logging
+access_log {{.AccessLog}} squid
+cache_log {{.CacheLog}}
+cache_store_log none
+
+# Disable caching for dynamic content
+acl dynamic_content url_regex cgi-bin \?
+cache deny dynamic_content
+
+# Performance tuning
+dns_nameservers 8.8.8.8 8.8.4.4
+dns_v4_first on
+
+# Refresh patterns
+refresh_pattern ^ftp:           1440    20%     10080
+refresh_pattern ^gopher:        1440    0%      1440
+refresh_pattern -i (/cgi-bin/|\?) 0     0%      0
+refresh_pattern .               0       20%     4320
+
+# Visible hostname
+visible_hostname aetherium-proxy
+
+# Do not forward proxy identity
+forwarded_for delete
+via off
+
+# Memory limits
+coredump_dir /var/spool/squid
