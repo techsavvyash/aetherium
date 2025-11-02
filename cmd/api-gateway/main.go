@@ -203,6 +203,9 @@ func main() {
 
 	// Routes
 	r.Route("/api/v1", func(r chi.Router) {
+		// Smart Execute - Intelligent VM selection
+		r.Post("/smart-execute", srv.smartExecute)
+
 		// VMs
 		r.Post("/vms", srv.createVM)
 		r.Get("/vms", srv.listVMs)
@@ -433,6 +436,133 @@ func (s *Server) listExecutions(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, api.ListExecutionsResponse{
 		Executions: execResponses,
 		Total:      len(execResponses),
+	})
+}
+
+func (s *Server) smartExecute(w http.ResponseWriter, r *http.Request) {
+	var req api.SmartExecuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	// Set defaults if not provided
+	if req.VCPUs == 0 {
+		req.VCPUs = 1
+	}
+	if req.MemoryMB == 0 {
+		req.MemoryMB = 512
+	}
+
+	var selectedVM *uuid.UUID
+	var vmName string
+	var vmCreated bool
+	var vmReused bool
+
+	// Strategy 1: If specific VM name provided, try to find it
+	if req.VMName != "" {
+		vm, err := s.taskService.GetVMByName(r.Context(), req.VMName)
+		if err == nil && vm != nil && vm.Status == "RUNNING" {
+			selectedVM = &vm.ID
+			vmName = vm.Name
+			vmReused = true
+			log.Printf("Smart Execute: Reusing specified VM %s (%s)", vmName, vm.ID)
+		}
+	}
+
+	// Strategy 2: If prefer existing and no specific VM, find any running VM
+	if selectedVM == nil && (req.PreferExisting || req.VMName == "") {
+		vms, err := s.taskService.ListVMs(r.Context())
+		if err == nil && len(vms) > 0 {
+			// Find first running VM
+			for _, vm := range vms {
+				if vm.Status == "RUNNING" {
+					selectedVM = &vm.ID
+					vmName = vm.Name
+					vmReused = true
+					log.Printf("Smart Execute: Reusing existing VM %s (%s)", vmName, vm.ID)
+					break
+				}
+			}
+		}
+	}
+
+	// Strategy 3: No suitable VM found, create a new one
+	if selectedVM == nil {
+		log.Printf("Smart Execute: Creating new VM with %d vCPUs and %dMB memory", req.VCPUs, req.MemoryMB)
+
+		// Generate name if not provided
+		if vmName == "" {
+			vmName = fmt.Sprintf("smart-vm-%d", time.Now().Unix())
+		} else {
+			vmName = req.VMName
+		}
+
+		// Create VM task
+		taskID, err := s.taskService.CreateVMTaskWithTools(
+			r.Context(),
+			vmName,
+			req.VCPUs,
+			req.MemoryMB,
+			req.RequiredTools,
+			nil, // tool versions
+		)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to create VM", err)
+			return
+		}
+
+		log.Printf("Smart Execute: VM creation task submitted (ID: %s), waiting for VM...", taskID)
+
+		// Wait for VM to be created (poll for up to 30 seconds)
+		var newVM *uuid.UUID
+		for i := 0; i < 30; i++ {
+			time.Sleep(1 * time.Second)
+
+			vm, err := s.taskService.GetVMByName(r.Context(), vmName)
+			if err == nil && vm != nil && vm.Status == "RUNNING" {
+				newVM = &vm.ID
+				break
+			}
+		}
+
+		if newVM == nil {
+			respondError(w, http.StatusInternalServerError, "VM creation timed out", nil)
+			return
+		}
+
+		selectedVM = newVM
+		vmCreated = true
+		log.Printf("Smart Execute: New VM created successfully: %s (%s)", vmName, *selectedVM)
+	}
+
+	// Execute command on selected VM
+	// If args are provided, use them directly. Otherwise, wrap the full command in bash -c
+	var taskID uuid.UUID
+	var execErr error
+	if len(req.Args) > 0 {
+		// Command and args provided separately
+		taskID, execErr = s.taskService.ExecuteCommandTask(r.Context(), selectedVM.String(), req.Command, req.Args)
+	} else {
+		// Full command string provided - execute via bash -c
+		taskID, execErr = s.taskService.ExecuteCommandTask(r.Context(), selectedVM.String(), "bash", []string{"-c", req.Command})
+	}
+
+	if execErr != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to execute command", execErr)
+		return
+	}
+
+	log.Printf("Smart Execute: Command execution task submitted (ID: %s) on VM %s", taskID, *selectedVM)
+
+	respondJSON(w, http.StatusAccepted, api.SmartExecuteResponse{
+		ExecutionID: taskID,
+		VMID:        *selectedVM,
+		VMName:      vmName,
+		VMCreated:   vmCreated,
+		VMReused:    vmReused,
+		Status:      "pending",
+		Message:     fmt.Sprintf("Command queued for execution on VM %s", vmName),
 	})
 }
 

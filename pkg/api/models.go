@@ -89,6 +89,28 @@ type TaskResponse struct {
 	CreatedAt time.Time              `json:"created_at"`
 }
 
+// SmartExecuteRequest represents a smart command execution request
+type SmartExecuteRequest struct {
+	Command         string            `json:"command" binding:"required"`
+	Args            []string          `json:"args,omitempty"`
+	VMName          string            `json:"vm_name,omitempty"`          // Optional: specific VM name
+	RequiredTools   []string          `json:"required_tools,omitempty"`   // Optional: tools needed for command
+	PreferExisting  bool              `json:"prefer_existing"`            // Default true: reuse existing VMs
+	VCPUs           int               `json:"vcpus,omitempty"`            // For new VM if needed
+	MemoryMB        int               `json:"memory_mb,omitempty"`        // For new VM if needed
+}
+
+// SmartExecuteResponse represents a smart command execution response
+type SmartExecuteResponse struct {
+	ExecutionID uuid.UUID `json:"execution_id"`
+	VMID        uuid.UUID `json:"vm_id"`
+	VMName      string    `json:"vm_name"`
+	VMCreated   bool      `json:"vm_created"`    // true if new VM was created
+	VMReused    bool      `json:"vm_reused"`     // true if existing VM was reused
+	Status      string    `json:"status"`
+	Message     string    `json:"message,omitempty"`
+}
+
 // LogQueryRequest represents a log query request
 type LogQueryRequest struct {
 	VMID       string `json:"vm_id,omitempty"`
