@@ -3,7 +3,6 @@
 
 # Package managers
 .npmjs.org
-.registry.npmjs.org
 .yarnpkg.com
 .pypi.org
 .files.pythonhosted.org
@@ -25,7 +24,7 @@
 # CDNs
 .cdn.jsdelivr.net
 .unpkg.com
-.cdnjs.cloudflare.com
+.cloudflare.com
 
 # Development tools
 .docker.com
@@ -45,4 +44,3 @@
 
 # DNS and connectivity checks
 .google.com
-.cloudflare.com
