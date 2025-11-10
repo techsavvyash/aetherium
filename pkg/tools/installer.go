@@ -13,12 +13,23 @@ import (
 // Installer handles tool installation in VMs
 type Installer struct {
 	orchestrator vmm.VMOrchestrator
+	// Default environment variables to inject into all commands
+	defaultEnv map[string]string
 }
 
 // NewInstaller creates a new tool installer
 func NewInstaller(orchestrator vmm.VMOrchestrator) *Installer {
 	return &Installer{
 		orchestrator: orchestrator,
+		defaultEnv:   make(map[string]string),
+	}
+}
+
+// NewInstallerWithEnv creates a new tool installer with default environment variables
+func NewInstallerWithEnv(orchestrator vmm.VMOrchestrator, env map[string]string) *Installer {
+	return &Installer{
+		orchestrator: orchestrator,
+		defaultEnv:   env,
 	}
 }
 
@@ -55,10 +66,11 @@ func (i *Installer) installTool(ctx context.Context, vmID string, tool string, v
 		return err
 	}
 
-	// Execute installation script
+	// Execute installation script with proxy environment variables
 	cmd := &vmm.Command{
 		Cmd:  "bash",
 		Args: []string{"-c", script},
+		Env:  i.defaultEnv, // Pass proxy settings and other env vars
 	}
 
 	result, err := i.orchestrator.ExecuteCommand(ctx, vmID, cmd)
@@ -97,6 +109,7 @@ func (i *Installer) isToolInstalled(ctx context.Context, vmID string, tool strin
 	cmd := &vmm.Command{
 		Cmd:  "bash",
 		Args: []string{"-c", checkCmd},
+		Env:  i.defaultEnv, // Pass proxy settings
 	}
 
 	result, err := i.orchestrator.ExecuteCommand(ctx, vmID, cmd)

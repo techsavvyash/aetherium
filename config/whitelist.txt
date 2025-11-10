@@ -1,0 +1,48 @@
+# Whitelisted domains for Aetherium VMs
+# Format: .domain.com (leading dot matches subdomains)
+
+# Package managers
+.npmjs.org
+.registry.npmjs.org
+.yarnpkg.com
+.pypi.org
+.files.pythonhosted.org
+.rubygems.org
+.crates.io
+
+# Source control
+.github.com
+.githubusercontent.com
+.gitlab.com
+.bitbucket.org
+
+# Cloud providers
+.amazonaws.com
+.cloudfront.net
+.googleusercontent.com
+.gstatic.com
+
+# CDNs
+.cdn.jsdelivr.net
+.unpkg.com
+.cdnjs.cloudflare.com
+
+# Development tools
+.docker.com
+.docker.io
+.golang.org
+.go.dev
+.nodejs.org
+
+# Mise (version manager) - critical for tool installation
+.mise.jdx.dev
+.github.io
+
+# Common utilities
+.ubuntu.com
+.debian.org
+.alpinelinux.org
+
+# DNS and connectivity checks
+.google.com
+.cloudflare.com

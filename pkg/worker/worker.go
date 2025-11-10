@@ -30,9 +30,9 @@ type Worker struct {
 	workerInfo *discovery.WorkerInfo
 
 	// Resource tracking
-	mu               sync.RWMutex
-	runningVMs       map[string]*vmResourceUsage
-	tasksProcessed   int
+	mu             sync.RWMutex
+	runningVMs     map[string]*vmResourceUsage
+	tasksProcessed int
 
 	// Heartbeat control
 	heartbeatCancel context.CancelFunc
@@ -334,6 +334,17 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 		SocketPath: fmt.Sprintf("/tmp/aetherium-vm-%s.sock", vmID),
 		VCPUCount:  payload.VCPUs,
 		MemoryMB:   payload.MemoryMB,
+		// Inject proxy environment variables for internet access control
+		// Proxy runs on host and is accessible via bridge IP
+		Env: map[string]string{
+			"HTTP_PROXY":  "http://172.16.0.1:3128",
+			"HTTPS_PROXY": "http://172.16.0.1:3128",
+			"http_proxy":  "http://172.16.0.1:3128",
+			"https_proxy": "http://172.16.0.1:3128",
+			// Don't proxy localhost and internal services
+			"NO_PROXY": "localhost,127.0.0.1,172.16.0.0/24",
+			"no_proxy": "localhost,127.0.0.1,172.16.0.0/24",
+		},
 	}
 
 	// Create VM using orchestrator
@@ -386,7 +397,10 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 			toolVersions = make(map[string]string)
 		}
 
-		if err := w.toolInstaller.InstallToolsWithTimeout(ctx, vm.ID, uniqueTools, toolVersions, 20*time.Minute); err != nil {
+		// Create installer with proxy environment variables from VM config
+		installerWithEnv := tools.NewInstallerWithEnv(w.orchestrator, vmConfig.Env)
+
+		if err := installerWithEnv.InstallToolsWithTimeout(ctx, vm.ID, uniqueTools, toolVersions, 20*time.Minute); err != nil {
 			log.Printf("Warning: Tool installation failed (VM still usable): %v", err)
 			// Don't fail the task, but log the error
 		} else {

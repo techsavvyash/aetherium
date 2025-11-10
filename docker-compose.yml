@@ -88,9 +88,31 @@ services:
     networks:
       - aetherium
 
+  # Squid proxy for VM internet access control
+  # Uses host network mode so VMs can reach it via host bridge IP (172.16.0.1:3128)
+  squid:
+    image: ubuntu/squid:latest
+    container_name: aetherium-squid
+    network_mode: host
+    volumes:
+      - ./config/squid.conf:/etc/squid/squid.conf:ro
+      - ./config/whitelist.txt:/etc/squid/whitelist.txt:ro
+      - squid_cache:/var/spool/squid
+      - squid_logs:/var/log/squid
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "squidclient", "-h", "localhost", "-p", "3128", "http://www.google.com"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
 networks:
   aetherium:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
 
 volumes:
   postgres_data:
@@ -98,3 +120,5 @@ volumes:
   consul_data:
   loki_data:
   grafana_data:
+  squid_cache:
+  squid_logs:
