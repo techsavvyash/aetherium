@@ -198,6 +198,57 @@ type WorkerMetricRepository interface {
 	DeleteOlderThan(ctx context.Context, before time.Time) error
 }
 
+// Secret represents an encrypted secret
+type Secret struct {
+	ID                 uuid.UUID  `db:"id" json:"id"`
+	Name               string     `db:"name" json:"name"`
+	Description        *string    `db:"description" json:"description,omitempty"`
+	EncryptedValue     string     `db:"encrypted_value" json:"-"` // Never expose in JSON
+	EncryptionKeyID    string     `db:"encryption_key_id" json:"encryption_key_id"`
+	EncryptionVersion  int        `db:"encryption_version" json:"encryption_version"`
+	Scope              string     `db:"scope" json:"scope"`
+	ScopeID            *uuid.UUID `db:"scope_id" json:"scope_id,omitempty"`
+	CreatedAt          time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time  `db:"updated_at" json:"updated_at"`
+	ExpiresAt          *time.Time `db:"expires_at" json:"expires_at,omitempty"`
+	RotatedAt          *time.Time `db:"rotated_at" json:"rotated_at,omitempty"`
+	CreatedBy          *string    `db:"created_by" json:"created_by,omitempty"`
+	UpdatedBy          *string    `db:"updated_by" json:"updated_by,omitempty"`
+	LastAccessedAt     *time.Time `db:"last_accessed_at" json:"last_accessed_at,omitempty"`
+	AccessCount        int        `db:"access_count" json:"access_count"`
+	Tags               JSONB      `db:"tags" json:"tags"`
+	Metadata           JSONB      `db:"metadata" json:"metadata"`
+}
+
+// SecretAuditLog represents an audit log entry for secret operations
+type SecretAuditLog struct {
+	ID          uuid.UUID  `db:"id" json:"id"`
+	SecretID    uuid.UUID  `db:"secret_id" json:"secret_id"`
+	SecretName  string     `db:"secret_name" json:"secret_name"`
+	Action      string     `db:"action" json:"action"`
+	Actor       *string    `db:"actor" json:"actor,omitempty"`
+	ActorIP     *string    `db:"actor_ip" json:"actor_ip,omitempty"`
+	VMID        *uuid.UUID `db:"vm_id" json:"vm_id,omitempty"`
+	ExecutionID *uuid.UUID `db:"execution_id" json:"execution_id,omitempty"`
+	Timestamp   time.Time  `db:"timestamp" json:"timestamp"`
+	Metadata    JSONB      `db:"metadata" json:"metadata"`
+}
+
+// SecretsRepository handles secret storage operations
+type SecretsRepository interface {
+	Create(ctx context.Context, secret *Secret) error
+	Get(ctx context.Context, id uuid.UUID) (*Secret, error)
+	GetByName(ctx context.Context, name string) (*Secret, error)
+	List(ctx context.Context, filters map[string]interface{}) ([]*Secret, error)
+	Update(ctx context.Context, secret *Secret) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	RecordAccess(ctx context.Context, secretID uuid.UUID) error
+
+	// Audit logging
+	CreateAuditLog(ctx context.Context, log *SecretAuditLog) error
+	GetAuditLogs(ctx context.Context, secretID uuid.UUID, limit int) ([]*SecretAuditLog, error)
+}
+
 // Store provides access to all repositories
 type Store interface {
 	VMs() VMRepository
@@ -206,5 +257,6 @@ type Store interface {
 	Executions() ExecutionRepository
 	Workers() WorkerRepository
 	WorkerMetrics() WorkerMetricRepository
+	Secrets() SecretsRepository
 	Close() error
 }
