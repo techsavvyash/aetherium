@@ -39,9 +39,10 @@ type VMOrchestrator interface {
 
 // Command represents a command to execute in a VM
 type Command struct {
-	Cmd  string            `json:"cmd"`
-	Args []string          `json:"args,omitempty"`
-	Env  map[string]string `json:"env,omitempty"`
+	Cmd              string            `json:"cmd"`
+	Args             []string          `json:"args,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	TransientSecrets map[string]string `json:"transient_secrets,omitempty"` // Secrets that won't be persisted to DB
 }
 
 // ExecResult represents the result of a command execution

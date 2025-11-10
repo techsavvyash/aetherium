@@ -65,14 +65,29 @@ func (s *TaskService) CreateVMTaskWithTools(ctx context.Context, name string, vc
 
 // ExecuteCommandTask submits a command execution task
 func (s *TaskService) ExecuteCommandTask(ctx context.Context, vmID, command string, args []string) (uuid.UUID, error) {
+	return s.ExecuteCommandTaskWithEnv(ctx, vmID, command, args, nil, nil)
+}
+
+// ExecuteCommandTaskWithEnv submits a command execution task with environment variables and secrets
+func (s *TaskService) ExecuteCommandTaskWithEnv(ctx context.Context, vmID, command string, args []string, env, transientSecrets map[string]string) (uuid.UUID, error) {
+	payload := map[string]interface{}{
+		"vm_id":   vmID,
+		"command": command,
+		"args":    args,
+	}
+
+	if len(env) > 0 {
+		payload["env"] = env
+	}
+
+	if len(transientSecrets) > 0 {
+		payload["transient_secrets"] = transientSecrets
+	}
+
 	task := &queue.Task{
-		ID:   uuid.New(),
-		Type: queue.TaskTypeVMExecute,
-		Payload: map[string]interface{}{
-			"vm_id":   vmID,
-			"command": command,
-			"args":    args,
-		},
+		ID:      uuid.New(),
+		Type:    queue.TaskTypeVMExecute,
+		Payload: payload,
 	}
 
 	if err := s.queue.Enqueue(ctx, task, &queue.TaskOptions{

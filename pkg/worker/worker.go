@@ -11,6 +11,7 @@ import (
 
 	"github.com/aetherium/aetherium/pkg/discovery"
 	"github.com/aetherium/aetherium/pkg/queue"
+	"github.com/aetherium/aetherium/pkg/security"
 	"github.com/aetherium/aetherium/pkg/storage"
 	"github.com/aetherium/aetherium/pkg/tools"
 	"github.com/aetherium/aetherium/pkg/types"
@@ -309,9 +310,11 @@ type VMCreatePayload struct {
 
 // VMExecutePayload represents command execution task payload
 type VMExecutePayload struct {
-	VMID    string   `json:"vm_id"`
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
+	VMID             string            `json:"vm_id"`
+	Command          string            `json:"command"`
+	Args             []string          `json:"args"`
+	Env              map[string]string `json:"env,omitempty"`
+	TransientSecrets map[string]string `json:"transient_secrets,omitempty"`
 }
 
 // HandleVMCreate handles VM creation tasks
@@ -467,10 +470,12 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 
 	log.Printf("Executing command on VM %s: %s %v", payload.VMID, payload.Command, payload.Args)
 
-	// Execute command
+	// Build command with env and transient secrets
 	cmd := &vmm.Command{
-		Cmd:  payload.Command,
-		Args: payload.Args,
+		Cmd:              payload.Command,
+		Args:             payload.Args,
+		Env:              payload.Env,
+		TransientSecrets: payload.TransientSecrets,
 	}
 
 	execResult, err := w.orchestrator.ExecuteCommand(ctx, payload.VMID, cmd)
@@ -484,11 +489,22 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 		}, nil
 	}
 
+	// Redact secrets from output before storing
+	secretRedacted := len(payload.TransientSecrets) > 0
+	stdout := execResult.Stdout
+	stderr := execResult.Stderr
+
+	if secretRedacted {
+		// Create redactor with transient secrets
+		redactor := security.NewRedactor(payload.TransientSecrets)
+		stdout = redactor.Redact(stdout)
+		stderr = redactor.Redact(stderr)
+		log.Printf("Redacted %d transient secrets from output", len(payload.TransientSecrets))
+	}
+
 	// Store execution in database
 	vmUUID, _ := uuid.Parse(payload.VMID)
 	exitCode := execResult.ExitCode
-	stdout := execResult.Stdout
-	stderr := execResult.Stderr
 
 	// Convert args to JSONBArray
 	args := make(storage.JSONBArray, len(payload.Args))
@@ -496,18 +512,26 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 		args[i] = arg
 	}
 
+	// Convert env to JSONB (only non-secret env vars are persisted)
+	var envJSONB storage.JSONB
+	if len(payload.Env) > 0 {
+		envJSONB = payload.Env
+	}
+
 	execution := &storage.Execution{
-		ID:          uuid.New(),
-		VMID:        &vmUUID,
-		Command:     payload.Command,
-		Args:        args,
-		ExitCode:    &exitCode,
-		Stdout:      &stdout,
-		Stderr:      &stderr,
-		StartedAt:   startTime,
-		CompletedAt: timePtr(time.Now()),
-		DurationMS:  intPtr(int(time.Since(startTime).Milliseconds())),
-		Metadata:    make(map[string]interface{}),
+		ID:             uuid.New(),
+		VMID:           &vmUUID,
+		Command:        payload.Command,
+		Args:           args,
+		Env:            envJSONB,        // Only regular env vars (persisted)
+		SecretRedacted: secretRedacted,  // Flag indicating secrets were used
+		ExitCode:       &exitCode,
+		Stdout:         &stdout,         // Redacted output
+		Stderr:         &stderr,         // Redacted output
+		StartedAt:      startTime,
+		CompletedAt:    timePtr(time.Now()),
+		DurationMS:     intPtr(int(time.Since(startTime).Milliseconds())),
+		Metadata:       make(map[string]interface{}),
 	}
 
 	if err := w.store.Executions().Create(ctx, execution); err != nil {
@@ -524,8 +548,8 @@ func (w *Worker) HandleVMExecute(ctx context.Context, task *queue.Task) (*queue.
 	result := map[string]interface{}{
 		"vm_id":     payload.VMID,
 		"exit_code": execResult.ExitCode,
-		"stdout":    execResult.Stdout,
-		"stderr":    execResult.Stderr,
+		"stdout":    execResult.Stdout,  // Return unredacted to caller
+		"stderr":    execResult.Stderr,  // Return unredacted to caller
 	}
 
 	if !success {

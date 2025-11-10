@@ -62,20 +62,21 @@ type Job struct {
 
 // Execution represents a command execution
 type Execution struct {
-	ID          uuid.UUID  `db:"id" json:"id"`
-	JobID       *uuid.UUID `db:"job_id" json:"job_id,omitempty"`
-	VMID        *uuid.UUID `db:"vm_id" json:"vm_id,omitempty"`
-	Command     string     `db:"command" json:"command"`
-	Args        JSONBArray `db:"args" json:"args,omitempty"`
-	Env         JSONB      `db:"env" json:"env,omitempty"`
-	ExitCode    *int       `db:"exit_code" json:"exit_code,omitempty"`
-	Stdout      *string    `db:"stdout" json:"stdout,omitempty"`
-	Stderr      *string    `db:"stderr" json:"stderr,omitempty"`
-	Error       *string    `db:"error" json:"error,omitempty"`
-	StartedAt   time.Time  `db:"started_at" json:"started_at"`
-	CompletedAt *time.Time `db:"completed_at" json:"completed_at,omitempty"`
-	DurationMS  *int       `db:"duration_ms" json:"duration_ms,omitempty"`
-	Metadata    JSONB      `db:"metadata" json:"metadata"`
+	ID             uuid.UUID  `db:"id" json:"id"`
+	JobID          *uuid.UUID `db:"job_id" json:"job_id,omitempty"`
+	VMID           *uuid.UUID `db:"vm_id" json:"vm_id,omitempty"`
+	Command        string     `db:"command" json:"command"`
+	Args           JSONBArray `db:"args" json:"args,omitempty"`
+	Env            JSONB      `db:"env" json:"env,omitempty"`
+	SecretRedacted bool       `db:"secret_redacted" json:"secret_redacted"` // Indicates if transient secrets were used
+	ExitCode       *int       `db:"exit_code" json:"exit_code,omitempty"`
+	Stdout         *string    `db:"stdout" json:"stdout,omitempty"`
+	Stderr         *string    `db:"stderr" json:"stderr,omitempty"`
+	Error          *string    `db:"error" json:"error,omitempty"`
+	StartedAt      time.Time  `db:"started_at" json:"started_at"`
+	CompletedAt    *time.Time `db:"completed_at" json:"completed_at,omitempty"`
+	DurationMS     *int       `db:"duration_ms" json:"duration_ms,omitempty"`
+	Metadata       JSONB      `db:"metadata" json:"metadata"`
 }
 
 // Worker represents a distributed worker node in the database

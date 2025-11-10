@@ -46,8 +46,10 @@ type ListVMsResponse struct {
 
 // ExecuteCommandRequest represents a command execution request
 type ExecuteCommandRequest struct {
-	Command string   `json:"command" binding:"required"`
-	Args    []string `json:"args,omitempty"`
+	Command          string            `json:"command" binding:"required"`
+	Args             []string          `json:"args,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`              // Environment variables (persisted to DB)
+	TransientSecrets map[string]string `json:"transient_secrets,omitempty"` // Secrets (NOT persisted to DB)
 }
 
 // ExecuteCommandResponse represents a command execution response
@@ -58,19 +60,21 @@ type ExecuteCommandResponse struct {
 }
 
 // ExecutionResponse represents a command execution result
+// Note: Env field is NOT included for security reasons (may contain secrets)
 type ExecutionResponse struct {
-	ID          uuid.UUID              `json:"id"`
-	VMID        *uuid.UUID             `json:"vm_id,omitempty"`
-	Command     string                 `json:"command"`
-	Args        []interface{}          `json:"args,omitempty"`
-	ExitCode    *int                   `json:"exit_code,omitempty"`
-	Stdout      *string                `json:"stdout,omitempty"`
-	Stderr      *string                `json:"stderr,omitempty"`
-	Error       *string                `json:"error,omitempty"`
-	StartedAt   time.Time              `json:"started_at"`
-	CompletedAt *time.Time             `json:"completed_at,omitempty"`
-	DurationMS  *int                   `json:"duration_ms,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID             uuid.UUID              `json:"id"`
+	VMID           *uuid.UUID             `json:"vm_id,omitempty"`
+	Command        string                 `json:"command"`
+	Args           []interface{}          `json:"args,omitempty"`
+	SecretRedacted bool                   `json:"secret_redacted"` // Indicates if transient secrets were used
+	ExitCode       *int                   `json:"exit_code,omitempty"`
+	Stdout         *string                `json:"stdout,omitempty"`
+	Stderr         *string                `json:"stderr,omitempty"`
+	Error          *string                `json:"error,omitempty"`
+	StartedAt      time.Time              `json:"started_at"`
+	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
+	DurationMS     *int                   `json:"duration_ms,omitempty"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ListExecutionsResponse represents a list of executions
@@ -91,13 +95,15 @@ type TaskResponse struct {
 
 // SmartExecuteRequest represents a smart command execution request
 type SmartExecuteRequest struct {
-	Command         string            `json:"command" binding:"required"`
-	Args            []string          `json:"args,omitempty"`
-	VMName          string            `json:"vm_name,omitempty"`          // Optional: specific VM name
-	RequiredTools   []string          `json:"required_tools,omitempty"`   // Optional: tools needed for command
-	PreferExisting  bool              `json:"prefer_existing"`            // Default true: reuse existing VMs
-	VCPUs           int               `json:"vcpus,omitempty"`            // For new VM if needed
-	MemoryMB        int               `json:"memory_mb,omitempty"`        // For new VM if needed
+	Command          string            `json:"command" binding:"required"`
+	Args             []string          `json:"args,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`              // Environment variables (persisted to DB)
+	TransientSecrets map[string]string `json:"transient_secrets,omitempty"` // Secrets (NOT persisted to DB)
+	VMName           string            `json:"vm_name,omitempty"`          // Optional: specific VM name
+	RequiredTools    []string          `json:"required_tools,omitempty"`   // Optional: tools needed for command
+	PreferExisting   bool              `json:"prefer_existing"`            // Default true: reuse existing VMs
+	VCPUs            int               `json:"vcpus,omitempty"`            // For new VM if needed
+	MemoryMB         int               `json:"memory_mb,omitempty"`        // For new VM if needed
 }
 
 // SmartExecuteResponse represents a smart command execution response

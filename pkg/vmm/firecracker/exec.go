@@ -110,9 +110,27 @@ func (f *FirecrackerOrchestrator) sendCommandAndWait(ctx context.Context, conn n
 		Args: cmd.Args,
 	}
 
-	// Convert env map to []string if needed
+	// Merge regular env and transient secrets
+	// TransientSecrets take precedence over Env if there's a key conflict
+	mergedEnv := make(map[string]string)
+
+	// First, add regular env vars
 	if cmd.Env != nil {
 		for k, v := range cmd.Env {
+			mergedEnv[k] = v
+		}
+	}
+
+	// Then, add transient secrets (will override any conflicting env vars)
+	if cmd.TransientSecrets != nil {
+		for k, v := range cmd.TransientSecrets {
+			mergedEnv[k] = v
+		}
+	}
+
+	// Convert merged env map to []string for the command request
+	if len(mergedEnv) > 0 {
+		for k, v := range mergedEnv {
 			req.Env = append(req.Env, fmt.Sprintf("%s=%s", k, v))
 		}
 	}

@@ -388,7 +388,15 @@ func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID, err := s.taskService.ExecuteCommandTask(r.Context(), idStr, req.Command, req.Args)
+	// Use new method that supports env and transient secrets
+	taskID, err := s.taskService.ExecuteCommandTaskWithEnv(
+		r.Context(),
+		idStr,
+		req.Command,
+		req.Args,
+		req.Env,
+		req.TransientSecrets,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to execute command", err)
 		return
@@ -418,18 +426,20 @@ func (s *Server) listExecutions(w http.ResponseWriter, r *http.Request) {
 	execResponses := make([]*api.ExecutionResponse, len(executions))
 	for i, exec := range executions {
 		execResponses[i] = &api.ExecutionResponse{
-			ID:          exec.ID,
-			VMID:        exec.VMID,
-			Command:     exec.Command,
-			Args:        exec.Args,
-			ExitCode:    exec.ExitCode,
-			Stdout:      exec.Stdout,
-			Stderr:      exec.Stderr,
-			Error:       exec.Error,
-			StartedAt:   exec.StartedAt,
-			CompletedAt: exec.CompletedAt,
-			DurationMS:  exec.DurationMS,
-			Metadata:    exec.Metadata,
+			ID:             exec.ID,
+			VMID:           exec.VMID,
+			Command:        exec.Command,
+			Args:           exec.Args,
+			SecretRedacted: exec.SecretRedacted, // Indicate if secrets were used
+			ExitCode:       exec.ExitCode,
+			Stdout:         exec.Stdout,
+			Stderr:         exec.Stderr,
+			Error:          exec.Error,
+			StartedAt:      exec.StartedAt,
+			CompletedAt:    exec.CompletedAt,
+			DurationMS:     exec.DurationMS,
+			Metadata:       exec.Metadata,
+			// Note: Env is intentionally NOT included for security
 		}
 	}
 
@@ -542,10 +552,24 @@ func (s *Server) smartExecute(w http.ResponseWriter, r *http.Request) {
 	var execErr error
 	if len(req.Args) > 0 {
 		// Command and args provided separately
-		taskID, execErr = s.taskService.ExecuteCommandTask(r.Context(), selectedVM.String(), req.Command, req.Args)
+		taskID, execErr = s.taskService.ExecuteCommandTaskWithEnv(
+			r.Context(),
+			selectedVM.String(),
+			req.Command,
+			req.Args,
+			req.Env,
+			req.TransientSecrets,
+		)
 	} else {
 		// Full command string provided - execute via bash -c
-		taskID, execErr = s.taskService.ExecuteCommandTask(r.Context(), selectedVM.String(), "bash", []string{"-c", req.Command})
+		taskID, execErr = s.taskService.ExecuteCommandTaskWithEnv(
+			r.Context(),
+			selectedVM.String(),
+			"bash",
+			[]string{"-c", req.Command},
+			req.Env,
+			req.TransientSecrets,
+		)
 	}
 
 	if execErr != nil {
