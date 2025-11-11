@@ -55,6 +55,34 @@ services:
     networks:
       - aetherium
 
+  # HashiCorp Vault for secret management
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: aetherium-vault
+    command: server
+    ports:
+      - "8200:8200"  # HTTP API & UI
+    environment:
+      VAULT_ADDR: http://0.0.0.0:8200
+      VAULT_DEV_ROOT_TOKEN_ID: aetherium-dev-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - ./config/vault-config.hcl:/vault/config/vault-config.hcl:ro
+      - vault_data:/vault/data
+      - vault_logs:/vault/logs
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      - consul
+    networks:
+      - aetherium
+
   # Grafana Loki for centralized logging (optional)
   loki:
     image: grafana/loki:latest
@@ -122,3 +150,5 @@ volumes:
   grafana_data:
   squid_cache:
   squid_logs:
+  vault_data:
+  vault_logs:
