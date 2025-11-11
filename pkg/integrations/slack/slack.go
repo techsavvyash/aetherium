@@ -265,17 +265,15 @@ func (s *SlackIntegration) VerifySlackRequest(timestamp, signature string, body 
 }
 
 // HandleSlashCommand handles a Slack slash command
-func (s *SlackIntegration) HandleSlashCommand(ctx context.Context, command string, text string, userID string, channelID string) (string, error) {
-	switch command {
-	case "/aetherium-status":
-		return "Aetherium is running! 🚀", nil
-	case "/aetherium-vm-list":
-		// TODO: Query VMs and return list
-		return "VM list functionality coming soon!", nil
-	case "/aetherium-task":
-		// TODO: Create task from slash command
-		return fmt.Sprintf("Creating task: %s", text), nil
-	default:
-		return fmt.Sprintf("Unknown command: %s", command), nil
-	}
+// Returns a response message or error
+func (s *SlackIntegration) HandleSlashCommand(ctx context.Context, command string, text string, userID string, channelID string) (interface{}, error) {
+	// Commands are handled by the command handler which has access to services
+	// This method just validates the request
+	return nil, nil
+}
+
+// HandleInteractiveAction handles button clicks and other interactive actions
+func (s *SlackIntegration) HandleInteractiveAction(ctx context.Context, actionID string, value string, userID string, channelID string) error {
+	// Interactive actions are handled by the action handler
+	return nil
 }

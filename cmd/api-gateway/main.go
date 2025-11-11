@@ -16,7 +16,9 @@ import (
 	"github.com/aetherium/aetherium/pkg/discovery"
 	"github.com/aetherium/aetherium/pkg/discovery/consul"
 	"github.com/aetherium/aetherium/pkg/events/redis"
+	"github.com/aetherium/aetherium/pkg/flows"
 	"github.com/aetherium/aetherium/pkg/integrations"
+	"github.com/aetherium/aetherium/pkg/integrations/discord"
 	githubIntegration "github.com/aetherium/aetherium/pkg/integrations/github"
 	"github.com/aetherium/aetherium/pkg/integrations/slack"
 	"github.com/aetherium/aetherium/pkg/logging/loki"
@@ -35,6 +37,7 @@ type Server struct {
 	integrations  *integrations.Registry
 	logger        *loki.LokiLogger
 	eventBus      *redis.RedisEventBus
+	flowExecutor  *flows.FlowExecutor
 }
 
 func main() {
@@ -116,6 +119,7 @@ func main() {
 	}
 
 	// Register Slack integration
+	var slackIntegration *slack.SlackIntegration
 	if slackToken := getEnv("SLACK_BOT_TOKEN", ""); slackToken != "" {
 		slackInt := slack.NewSlackIntegration()
 		if err := slackInt.Initialize(context.Background(), integrations.Config{
@@ -127,12 +131,43 @@ func main() {
 			log.Printf("Warning: Failed to initialize Slack integration: %v", err)
 		} else {
 			registry.Register(slackInt)
+			slackIntegration = slackInt
 			log.Println("✓ Slack integration registered")
+		}
+	}
+
+	// Register Discord integration
+	var discordIntegration *discord.DiscordIntegration
+	if discordToken := getEnv("DISCORD_BOT_TOKEN", ""); discordToken != "" {
+		discordInt := discord.NewDiscordIntegration()
+		if err := discordInt.Initialize(context.Background(), integrations.Config{
+			Options: map[string]interface{}{
+				"bot_token":      discordToken,
+				"application_id": getEnv("DISCORD_APPLICATION_ID", ""),
+				"public_key":     getEnv("DISCORD_PUBLIC_KEY", ""),
+			},
+		}); err != nil {
+			log.Printf("Warning: Failed to initialize Discord integration: %v", err)
+		} else {
+			registry.Register(discordInt)
+			discordIntegration = discordInt
+			log.Println("✓ Discord integration registered")
+
+			// Register Discord slash commands
+			if err := discordInt.RegisterCommands(context.Background()); err != nil {
+				log.Printf("Warning: Failed to register Discord commands: %v", err)
+			} else {
+				log.Println("✓ Discord commands registered")
+			}
 		}
 	}
 
 	// Create task service
 	taskService := service.NewTaskService(queue, store)
+
+	// Initialize flow executor
+	flowExecutor := flows.NewFlowExecutor(taskService, store)
+	log.Println("✓ Flow executor initialized")
 
 	// Initialize service discovery (optional)
 	var workerService *service.WorkerService
@@ -175,6 +210,25 @@ func main() {
 		integrations:  registry,
 		logger:        logger,
 		eventBus:      eventBus,
+		flowExecutor:  flowExecutor,
+	}
+
+	// Create webhook handlers
+	var webhookHandlers *WebhookHandlers
+	if slackIntegration != nil || discordIntegration != nil {
+		var slackHandler *slack.CommandHandler
+		var discordHandler *discord.CommandHandler
+
+		if slackIntegration != nil {
+			slackHandler = slack.NewCommandHandler(slackIntegration, taskService, flowExecutor)
+		}
+
+		if discordIntegration != nil {
+			discordHandler = discord.NewCommandHandler(discordIntegration, taskService, flowExecutor)
+		}
+
+		webhookHandlers = NewWebhookHandlers(slackHandler, discordHandler, flowExecutor)
+		log.Println("✓ Webhook handlers initialized")
 	}
 
 	// Setup router
@@ -200,6 +254,12 @@ func main() {
 	// Static UI
 	r.Get("/ui", srv.serveUI)
 	r.Get("/", srv.serveUI) // Redirect root to UI
+
+	// Webhook routes (at root level for compatibility with Slack/Discord)
+	if webhookHandlers != nil {
+		SetupWebhookRoutes(r, webhookHandlers)
+		log.Println("✓ Webhook routes configured")
+	}
 
 	// Routes
 	r.Route("/api/v1", func(r chi.Router) {
@@ -232,8 +292,13 @@ func main() {
 		r.Post("/logs/query", srv.queryLogs)
 		r.Get("/logs/stream", srv.streamLogs) // WebSocket
 
-		// Integrations
+		// Integrations (deprecated, use root level webhooks)
 		r.Post("/webhooks/{integration}", srv.handleWebhook)
+
+		// Flows
+		r.Get("/flows", srv.listFlows)
+		r.Get("/flows/{id}", srv.getFlow)
+		r.Post("/flows/{id}/execute", srv.executeFlow)
 
 		// Health
 		r.Get("/health", srv.health)
@@ -608,6 +673,78 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// TODO: Parse webhook payload and publish event
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "received"})
+}
+
+// listFlows lists all available flows
+func (s *Server) listFlows(w http.ResponseWriter, r *http.Request) {
+	flows := s.flowExecutor.ListFlows()
+
+	type flowResponse struct {
+		ID          string                    `json:"id"`
+		Name        string                    `json:"name"`
+		Description string                    `json:"description"`
+		Parameters  []flows.FlowParameter `json:"parameters"`
+	}
+
+	response := make([]flowResponse, 0, len(flows))
+	for _, flow := range flows {
+		response = append(response, flowResponse{
+			ID:          flow.ID,
+			Name:        flow.Name,
+			Description: flow.Description,
+			Parameters:  flow.Parameters,
+		})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"flows": response,
+		"total": len(response),
+	})
+}
+
+// getFlow gets a specific flow definition
+func (s *Server) getFlow(w http.ResponseWriter, r *http.Request) {
+	flowID := chi.URLParam(r, "id")
+
+	flow, err := s.flowExecutor.GetFlow(flowID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Flow not found", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, flow)
+}
+
+// executeFlow executes a flow
+func (s *Server) executeFlow(w http.ResponseWriter, r *http.Request) {
+	flowID := chi.URLParam(r, "id")
+
+	var req struct {
+		Parameters map[string]interface{} `json:"parameters"`
+		TriggerBy  string                 `json:"trigger_by"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	if req.Parameters == nil {
+		req.Parameters = make(map[string]interface{})
+	}
+
+	execution, err := s.flowExecutor.ExecuteFlow(r.Context(), flowID, req.Parameters, req.TriggerBy, "api")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Failed to execute flow", err)
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, map[string]interface{}{
+		"execution_id": execution.ID,
+		"flow_id":      execution.FlowID,
+		"status":       execution.Status,
+		"started_at":   execution.StartedAt,
+	})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
