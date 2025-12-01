@@ -1,0 +1,299 @@
+# Default values for aetherium
+# This is a YAML-formatted file.
+
+global:
+  # Environment: development, staging, production
+  environment: development
+  # Image registry prefix
+  imageRegistry: "ghcr.io/techsavvyash"
+  # Image pull policy
+  imagePullPolicy: IfNotPresent
+  # Image pull secrets
+  imagePullSecrets: []
+
+# API Gateway configuration
+apiGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: aetherium/api-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: aetherium.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Environment variables
+  env: []
+  # Extra volume mounts
+  extraVolumeMounts: []
+  extraVolumes: []
+  # Probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# Worker configuration
+worker:
+  enabled: true
+  # Use DaemonSet for workers (one per KVM-enabled node)
+  kind: DaemonSet
+  # Or use Deployment with specific replica count
+  # kind: Deployment
+  # replicaCount: 3
+  image:
+    repository: aetherium/worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  # Workers need privileged access for Firecracker
+  securityContext:
+    privileged: true
+    capabilities:
+      add:
+        - NET_ADMIN
+        - SYS_ADMIN
+  # Only schedule on KVM-enabled nodes
+  nodeSelector:
+    aetherium.io/kvm-enabled: "true"
+  tolerations:
+    - key: "aetherium.io/worker"
+      operator: "Exists"
+      effect: "NoSchedule"
+  affinity: {}
+  # Use host network for VM networking
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+  # Required volumes for Firecracker
+  volumes:
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm
+        type: CharDevice
+    - name: dev-vhost-vsock
+      hostPath:
+        path: /dev/vhost-vsock
+        type: CharDevice
+    - name: firecracker-data
+      hostPath:
+        path: /var/firecracker
+        type: DirectoryOrCreate
+    - name: vm-sockets
+      hostPath:
+        path: /tmp/aetherium-sockets
+        type: DirectoryOrCreate
+  volumeMounts:
+    - name: dev-kvm
+      mountPath: /dev/kvm
+    - name: dev-vhost-vsock
+      mountPath: /dev/vhost-vsock
+    - name: firecracker-data
+      mountPath: /var/firecracker
+    - name: vm-sockets
+      mountPath: /tmp
+  env: []
+  # Probes
+  livenessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - "pgrep worker"
+    initialDelaySeconds: 30
+    periodSeconds: 30
+  readinessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - "test -S /tmp/aetherium-worker.sock || pgrep worker"
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+# PostgreSQL configuration
+postgresql:
+  enabled: true
+  auth:
+    username: aetherium
+    password: aetherium
+    database: aetherium
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "1000m"
+  # External PostgreSQL configuration (when enabled: false)
+  external:
+    host: ""
+    port: 5432
+    database: aetherium
+    existingSecret: ""
+    secretKeys:
+      username: username
+      password: password
+
+# Redis configuration
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+  # External Redis configuration (when enabled: false)
+  external:
+    host: ""
+    port: 6379
+    password: ""
+
+# Loki configuration (for centralized logging)
+loki:
+  enabled: false
+  url: ""
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# Application configuration
+config:
+  # VMM Provider configuration
+  vmm:
+    provider: firecracker
+    firecracker:
+      kernelPath: /var/firecracker/vmlinux
+      rootfsTemplate: /var/firecracker/rootfs.ext4
+      socketDir: /tmp
+      defaultVcpu: 1
+      defaultMemoryMb: 256
+    docker:
+      socketPath: /var/run/docker.sock
+      defaultImage: ubuntu:22.04
+
+  # Queue configuration
+  queue:
+    provider: asynq
+    concurrency: 10
+    priorities:
+      critical: 10
+      high: 7
+      default: 5
+      low: 2
+
+  # Logging configuration
+  logging:
+    provider: stdout
+    level: info
+    lokiUrl: ""
+
+  # Tools configuration
+  tools:
+    default:
+      - git
+      - nodejs@20
+      - bun
+      - claude-code
+    installTimeout: 20m
+
+  # Server configuration
+  server:
+    host: "0.0.0.0"
+    port: 8080
+    gracefulShutdown: 30s
+
+# Network policies
+networkPolicies:
+  enabled: false
+
+# Pod disruption budgets
+podDisruptionBudget:
+  apiGateway:
+    enabled: false
+    minAvailable: 1
+  worker:
+    enabled: false
+    minAvailable: 1
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ConfigMap for Aetherium configuration
+configMap:
+  create: true
+  name: ""
+
+# Secrets
+secrets:
+  create: true
+  # PostgreSQL credentials
+  postgres:
+    username: aetherium
+    password: aetherium
+  # GitHub integration
+  github:
+    token: ""
+    webhookSecret: ""
+  # Slack integration
+  slack:
+    botToken: ""
+    appToken: ""
+
+# Metrics and monitoring
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s

@@ -1,0 +1,107 @@
+
+=======================================================================
+                         AETHERIUM DEPLOYED
+=======================================================================
+
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Environment: {{ .Values.global.environment }}
+
+=======================================================================
+                        COMPONENT STATUS
+=======================================================================
+
+{{- if .Values.apiGateway.enabled }}
+API Gateway:
+  - Replicas: {{ .Values.apiGateway.replicaCount }}
+  - Service: {{ include "aetherium.fullname" . }}-api-gateway
+  - Port: {{ .Values.apiGateway.service.port }}
+{{- end }}
+
+{{- if .Values.worker.enabled }}
+Worker:
+  - Kind: {{ .Values.worker.kind }}
+  - Host Network: {{ .Values.worker.hostNetwork }}
+  - Privileged: {{ .Values.worker.securityContext.privileged }}
+{{- end }}
+
+=======================================================================
+                        ACCESS THE API
+=======================================================================
+
+{{- if .Values.apiGateway.enabled }}
+{{- if .Values.apiGateway.ingress.enabled }}
+Access via Ingress:
+{{- range $host := .Values.apiGateway.ingress.hosts }}
+  http{{ if $.Values.apiGateway.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- else if eq .Values.apiGateway.service.type "LoadBalancer" }}
+Get the LoadBalancer IP:
+  export SERVICE_IP=$(kubectl get svc {{ include "aetherium.fullname" . }}-api-gateway -n {{ .Release.Namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  echo "API Gateway: http://$SERVICE_IP:{{ .Values.apiGateway.service.port }}"
+{{- else if eq .Values.apiGateway.service.type "NodePort" }}
+Get the NodePort:
+  export NODE_PORT=$(kubectl get svc {{ include "aetherium.fullname" . }}-api-gateway -n {{ .Release.Namespace }} -o jsonpath='{.spec.ports[0].nodePort}')
+  export NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+  echo "API Gateway: http://$NODE_IP:$NODE_PORT"
+{{- else }}
+Port forward to access locally:
+  kubectl port-forward svc/{{ include "aetherium.fullname" . }}-api-gateway {{ .Values.apiGateway.service.port }}:{{ .Values.apiGateway.service.port }} -n {{ .Release.Namespace }}
+  echo "API Gateway: http://localhost:{{ .Values.apiGateway.service.port }}"
+{{- end }}
+{{- end }}
+
+=======================================================================
+                        QUICK START
+=======================================================================
+
+1. Create a VM:
+   curl -X POST http://localhost:{{ .Values.apiGateway.service.port }}/api/v1/vms \
+     -H "Content-Type: application/json" \
+     -d '{"name": "my-vm", "vcpus": 2, "memory_mb": 2048}'
+
+2. Execute a command:
+   curl -X POST http://localhost:{{ .Values.apiGateway.service.port }}/api/v1/vms/{vm-id}/execute \
+     -H "Content-Type: application/json" \
+     -d '{"command": "echo", "args": ["Hello from Aetherium!"]}'
+
+3. List VMs:
+   curl http://localhost:{{ .Values.apiGateway.service.port }}/api/v1/vms
+
+=======================================================================
+                        PREREQUISITES
+=======================================================================
+
+For worker nodes to run Firecracker VMs, ensure:
+
+1. KVM is enabled on worker nodes:
+   - Check: ls -la /dev/kvm
+   - Label nodes: kubectl label nodes <node> aetherium.io/kvm-enabled=true
+
+2. Vhost-vsock is available:
+   - Check: ls -la /dev/vhost-vsock
+   - Load module: modprobe vhost_vsock
+
+3. Firecracker assets are present at /var/firecracker/:
+   - vmlinux (kernel with vsock support)
+   - rootfs.ext4 (root filesystem)
+
+=======================================================================
+                        USEFUL COMMANDS
+=======================================================================
+
+# Check pod status
+kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+# View API Gateway logs
+kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=api-gateway -f
+
+# View Worker logs
+kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=worker -f
+
+# Check configuration
+kubectl get configmap {{ include "aetherium.configMapName" . }} -n {{ .Release.Namespace }} -o yaml
+
+=======================================================================
