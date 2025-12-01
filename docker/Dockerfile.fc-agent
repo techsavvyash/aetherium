@@ -1,0 +1,38 @@
+# Dockerfile for FC Agent (runs inside Firecracker VM)
+# This is a minimal image that gets baked into the rootfs
+
+# =============================================================================
+# Stage 1: Build
+# =============================================================================
+FROM golang:1.23-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build static binary for Linux
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -extldflags '-static'" \
+    -o /build/bin/fc-agent \
+    ./cmd/fc-agent
+
+# =============================================================================
+# Stage 2: Minimal Runtime (for extraction)
+# =============================================================================
+FROM scratch
+
+# Copy only the binary
+COPY --from=builder /build/bin/fc-agent /fc-agent
+
+# This image is meant to be used for extracting the binary
+# to include in the Firecracker rootfs, not to run as a container
+ENTRYPOINT ["/fc-agent"]

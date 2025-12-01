@@ -1,0 +1,92 @@
+# Dockerfile for Aetherium Worker
+# Multi-stage build with Firecracker dependencies
+
+# =============================================================================
+# Stage 1: Build
+# =============================================================================
+FROM golang:1.23-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the worker binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
+    -o /build/bin/worker \
+    ./cmd/worker
+
+# Build the FC agent binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /build/bin/fc-agent \
+    ./cmd/fc-agent
+
+# =============================================================================
+# Stage 2: Firecracker Download
+# =============================================================================
+FROM alpine:3.19 AS firecracker
+
+# Install download tools
+RUN apk add --no-cache curl tar
+
+# Download Firecracker v1.7.0
+ARG FIRECRACKER_VERSION=v1.7.0
+RUN curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" | \
+    tar -xz -C /tmp && \
+    mv "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/firecracker && \
+    chmod +x /usr/local/bin/firecracker
+
+# =============================================================================
+# Stage 3: Runtime
+# =============================================================================
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    iproute2 \
+    iptables \
+    bridge-utils \
+    util-linux
+
+# Create directories for Firecracker
+RUN mkdir -p /var/firecracker /tmp/aetherium-sockets /var/log/aetherium
+
+# Copy binaries
+COPY --from=builder /build/bin/worker /usr/local/bin/worker
+COPY --from=builder /build/bin/fc-agent /usr/local/bin/fc-agent
+COPY --from=firecracker /usr/local/bin/firecracker /usr/local/bin/firecracker
+
+# Copy default config
+COPY config/config.yaml /etc/aetherium/config.yaml
+
+# Copy setup scripts
+COPY scripts/setup-network.sh /usr/local/bin/setup-network.sh
+RUN chmod +x /usr/local/bin/setup-network.sh
+
+# Environment variables
+ENV CONFIG_PATH=/etc/aetherium/config.yaml
+
+# Note: Worker runs as root because it needs:
+# - Access to /dev/kvm for Firecracker
+# - Access to /dev/vhost-vsock for vsock communication
+# - Network configuration privileges (TAP devices, bridges)
+
+# Health check - verify worker process is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD pgrep worker || exit 1
+
+# Entry point with network setup
+ENTRYPOINT ["/usr/local/bin/worker"]

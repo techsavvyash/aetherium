@@ -1,0 +1,164 @@
+# Production values for aetherium
+# Use: helm install aetherium ./helm/aetherium -f ./helm/aetherium/values-production.yaml
+
+global:
+  environment: production
+  imageRegistry: "ghcr.io/techsavvyash"
+  imagePullPolicy: Always
+  imagePullSecrets:
+    - ghcr-pull-secret
+
+apiGateway:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: aetherium/api-gateway
+    tag: "1.0.0"
+  service:
+    type: LoadBalancer
+    port: 8080
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    hosts:
+      - host: aetherium.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: aetherium-tls
+        hosts:
+          - aetherium.example.com
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - api-gateway
+            topologyKey: kubernetes.io/hostname
+
+worker:
+  enabled: true
+  kind: DaemonSet
+  image:
+    repository: aetherium/worker
+    tag: "1.0.0"
+  securityContext:
+    privileged: true
+    capabilities:
+      add:
+        - NET_ADMIN
+        - SYS_ADMIN
+  nodeSelector:
+    aetherium.io/kvm-enabled: "true"
+    node.kubernetes.io/instance-type: Standard_D8s_v3
+  tolerations:
+    - key: "aetherium.io/worker"
+      operator: "Exists"
+      effect: "NoSchedule"
+  hostNetwork: true
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "4000m"
+
+postgresql:
+  enabled: false
+  external:
+    host: aetherium-db.postgres.database.azure.com
+    port: 5432
+    database: aetherium
+    existingSecret: postgres-credentials
+    secretKeys:
+      username: username
+      password: password
+
+redis:
+  enabled: false
+  external:
+    host: aetherium-cache.redis.cache.windows.net
+    port: 6380
+    password: ""
+
+loki:
+  enabled: true
+  url: http://loki:3100
+  persistence:
+    enabled: true
+    size: 50Gi
+
+config:
+  vmm:
+    provider: firecracker
+    firecracker:
+      kernelPath: /var/firecracker/vmlinux
+      rootfsTemplate: /var/firecracker/rootfs.ext4
+      socketDir: /tmp
+      defaultVcpu: 2
+      defaultMemoryMb: 512
+
+  queue:
+    provider: asynq
+    concurrency: 20
+    priorities:
+      critical: 10
+      high: 7
+      default: 5
+      low: 2
+
+  logging:
+    provider: loki
+    level: info
+    lokiUrl: http://loki:3100
+
+  tools:
+    default:
+      - git
+      - nodejs@20
+      - bun
+      - claude-code
+    installTimeout: 30m
+
+  server:
+    host: "0.0.0.0"
+    port: 8080
+    gracefulShutdown: 60s
+
+networkPolicies:
+  enabled: true
+
+podDisruptionBudget:
+  apiGateway:
+    enabled: true
+    minAvailable: 2
+  worker:
+    enabled: true
+    minAvailable: 1
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 15s

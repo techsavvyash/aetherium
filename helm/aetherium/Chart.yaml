@@ -1,0 +1,25 @@
+apiVersion: v2
+name: aetherium
+description: A Helm chart for Aetherium - distributed task execution platform with Firecracker microVMs
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - aetherium
+  - firecracker
+  - microvm
+  - task-execution
+  - distributed
+home: https://github.com/techsavvyash/aetherium
+maintainers:
+  - name: techsavvyash
+    email: techsavvyash@example.com
+dependencies:
+  - name: postgresql
+    version: "13.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "18.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
