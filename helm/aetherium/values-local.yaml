@@ -1,0 +1,124 @@
+# =============================================================================
+# Aetherium Local Development Values
+# =============================================================================
+# Use this for local development with kind, minikube, or k3s.
+# Uses Docker VMM instead of Firecracker (no KVM required).
+#
+# Usage:
+#   helm install aetherium ./helm/aetherium -f ./helm/aetherium/values-local.yaml
+# =============================================================================
+
+global:
+  environment: development
+  imageRegistry: ""  # Use local images
+  imagePullPolicy: IfNotPresent
+
+# API Gateway - minimal resources
+apiGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: aetherium/api-gateway
+    tag: dev
+  service:
+    type: NodePort
+    port: 8080
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+
+# Worker - Docker VMM mode (no KVM needed)
+worker:
+  enabled: true
+  kind: Deployment  # Use Deployment instead of DaemonSet for local
+  replicaCount: 1
+  image:
+    repository: aetherium/worker
+    tag: dev
+  # No KVM requirement for Docker VMM
+  nodeSelector: {}
+  tolerations: []
+  # Mount Docker socket instead of KVM devices
+  securityContext:
+    privileged: false
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Disable node provisioner (not needed for Docker VMM)
+nodeProvisioner:
+  enabled: false
+
+# Consul - single instance
+consul:
+  enabled: true
+  replicas: 1
+  persistence:
+    enabled: false  # Use emptyDir for local
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+
+# PostgreSQL - minimal
+postgresql:
+  enabled: true
+  auth:
+    username: aetherium
+    password: aetherium
+    database: aetherium
+  primary:
+    persistence:
+      enabled: false  # Use emptyDir for local
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+
+# Redis - minimal
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false  # Use emptyDir for local
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+
+# Application config - Docker VMM
+config:
+  vmm:
+    provider: docker  # Use Docker instead of Firecracker
+    docker:
+      socketPath: /var/run/docker.sock
+      defaultImage: ubuntu:22.04
+    firecracker:
+      # These won't be used in Docker mode
+      kernelPath: /var/firecracker/vmlinux
+      rootfsTemplate: /var/firecracker/rootfs.ext4
+
+  queue:
+    provider: asynq
+    concurrency: 5
+
+  logging:
+    provider: stdout
+    level: debug
+
+  tools:
+    default:
+      - git
+      - nodejs@20
+    installTimeout: 10m
