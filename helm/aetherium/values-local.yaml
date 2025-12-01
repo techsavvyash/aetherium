@@ -1,8 +1,13 @@
 # =============================================================================
 # Aetherium Local Development Values
 # =============================================================================
-# Use this for local development with kind, minikube, or k3s.
-# Uses Docker VMM instead of Firecracker (no KVM required).
+# Use this for local testing on a Linux machine with KVM/Firecracker.
+#
+# Prerequisites:
+#   - KVM enabled (/dev/kvm accessible)
+#   - Firecracker installed
+#   - Kernel at /var/firecracker/vmlinux
+#   - Rootfs at /var/firecracker/rootfs.ext4
 #
 # Usage:
 #   helm install aetherium ./helm/aetherium -f ./helm/aetherium/values-local.yaml
@@ -31,29 +36,26 @@ apiGateway:
       memory: "256Mi"
       cpu: "250m"
 
-# Worker - Docker VMM mode (no KVM needed)
+# Worker - Firecracker mode with KVM
 worker:
   enabled: true
-  kind: Deployment  # Use Deployment instead of DaemonSet for local
+  kind: Deployment  # Use Deployment for local (single node)
   replicaCount: 1
   image:
     repository: aetherium/worker
     tag: dev
-  # No KVM requirement for Docker VMM
+  # For local testing, we assume the node has KVM
   nodeSelector: {}
   tolerations: []
-  # Mount Docker socket instead of KVM devices
-  securityContext:
-    privileged: false
   resources:
     requests:
       memory: "256Mi"
       cpu: "100m"
     limits:
-      memory: "1Gi"
-      cpu: "1000m"
+      memory: "2Gi"
+      cpu: "2000m"
 
-# Disable node provisioner (not needed for Docker VMM)
+# Disable node provisioner (Firecracker already installed locally)
 nodeProvisioner:
   enabled: false
 
@@ -97,17 +99,16 @@ redis:
         memory: "64Mi"
         cpu: "50m"
 
-# Application config - Docker VMM
+# Application config - Firecracker VMM
 config:
   vmm:
-    provider: docker  # Use Docker instead of Firecracker
-    docker:
-      socketPath: /var/run/docker.sock
-      defaultImage: ubuntu:22.04
+    provider: firecracker
     firecracker:
-      # These won't be used in Docker mode
       kernelPath: /var/firecracker/vmlinux
       rootfsTemplate: /var/firecracker/rootfs.ext4
+      socketDir: /run/aetherium
+      defaultVcpu: 1
+      defaultMemoryMb: 256
 
   queue:
     provider: asynq
