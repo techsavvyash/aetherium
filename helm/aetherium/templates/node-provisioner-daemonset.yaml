@@ -1,0 +1,289 @@
+{{- if .Values.nodeProvisioner.enabled }}
+# =============================================================================
+# Aetherium Node Provisioner DaemonSet
+# =============================================================================
+# This DaemonSet runs on ALL nodes and automatically:
+# 1. Detects KVM capability
+# 2. Downloads and installs Firecracker
+# 3. Downloads kernel and prepares rootfs
+# 4. Labels the node as kvm-enabled
+# 5. Loads required kernel modules
+#
+# This enables auto-scaling - new nodes are automatically prepared.
+# =============================================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "aetherium.fullname" . }}-node-provisioner
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-provisioner
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aetherium-node-provisioner
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aetherium-node-provisioner
+        {{- include "aetherium.labels" . | nindent 8 }}
+        app.kubernetes.io/component: node-provisioner
+    spec:
+      # Run on ALL nodes - we detect KVM capability
+      tolerations:
+        - operator: Exists
+      # Need host access for setup
+      hostNetwork: true
+      hostPID: true
+      serviceAccountName: {{ include "aetherium.fullname" . }}-node-provisioner
+
+      initContainers:
+        # =======================================================================
+        # Init 1: Detect KVM and prepare node
+        # =======================================================================
+        - name: provision-node
+          image: {{ .Values.nodeProvisioner.image | default "alpine:3.19" }}
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: FIRECRACKER_VERSION
+              value: {{ .Values.nodeProvisioner.firecrackerVersion | default "v1.7.0" | quote }}
+            - name: KERNEL_URL
+              value: {{ .Values.nodeProvisioner.kernelUrl | default "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin" | quote }}
+            - name: ROOTFS_URL
+              value: {{ .Values.nodeProvisioner.rootfsUrl | default "" | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              echo "=============================================="
+              echo "  Aetherium Node Provisioner"
+              echo "  Node: $NODE_NAME"
+              echo "=============================================="
+
+              # Check if KVM is available
+              if [ ! -e /host/dev/kvm ]; then
+                echo "INFO: KVM not available on this node"
+                echo "INFO: This node will NOT run Aetherium workers"
+                echo "SKIP" > /tmp/provision-status
+                exit 0
+              fi
+
+              echo "OK: KVM device found"
+
+              # Create directories on host
+              mkdir -p /host/var/firecracker
+              mkdir -p /host/run/aetherium
+              mkdir -p /host/var/log/aetherium
+
+              # Load kernel modules via nsenter
+              echo "Loading kernel modules..."
+              nsenter --target 1 --mount -- modprobe kvm 2>/dev/null || true
+              nsenter --target 1 --mount -- modprobe kvm_intel 2>/dev/null || nsenter --target 1 --mount -- modprobe kvm_amd 2>/dev/null || true
+              nsenter --target 1 --mount -- modprobe vhost_vsock 2>/dev/null || true
+
+              # Check vhost-vsock
+              if [ ! -e /host/dev/vhost-vsock ]; then
+                echo "WARN: vhost-vsock not available - VM communication may fail"
+              else
+                echo "OK: vhost-vsock available"
+              fi
+
+              # Install Firecracker if not present
+              if [ ! -x /host/usr/local/bin/firecracker ]; then
+                echo "Installing Firecracker ${FIRECRACKER_VERSION}..."
+                apk add --no-cache curl tar
+
+                curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \
+                  | tar -xz -C /tmp
+
+                cp "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" \
+                  /host/usr/local/bin/firecracker
+                chmod +x /host/usr/local/bin/firecracker
+
+                echo "OK: Firecracker installed"
+              else
+                echo "OK: Firecracker already installed"
+              fi
+
+              # Download kernel if not present
+              if [ ! -f /host/var/firecracker/vmlinux ]; then
+                echo "Downloading kernel..."
+                apk add --no-cache curl
+
+                curl -fsSL -o /host/var/firecracker/vmlinux "$KERNEL_URL"
+
+                echo "OK: Kernel downloaded"
+              else
+                echo "OK: Kernel already present"
+              fi
+
+              # Download rootfs if URL provided and not present
+              if [ -n "$ROOTFS_URL" ] && [ ! -f /host/var/firecracker/rootfs.ext4 ]; then
+                echo "Downloading rootfs..."
+                curl -fsSL -o /host/var/firecracker/rootfs.ext4 "$ROOTFS_URL"
+                echo "OK: Rootfs downloaded"
+              elif [ -f /host/var/firecracker/rootfs.ext4 ]; then
+                echo "OK: Rootfs already present"
+              else
+                echo "WARN: No rootfs URL provided and rootfs not present"
+                echo "WARN: You need to run prepare-rootfs-with-tools.sh manually or provide ROOTFS_URL"
+              fi
+
+              # Enable IP forwarding
+              echo 1 > /host/proc/sys/net/ipv4/ip_forward
+
+              echo "READY" > /tmp/provision-status
+              echo ""
+              echo "=============================================="
+              echo "  Node provisioning complete!"
+              echo "=============================================="
+
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+            - name: provision-status
+              mountPath: /tmp
+
+        # =======================================================================
+        # Init 2: Label node if KVM-capable
+        # =======================================================================
+        - name: label-node
+          image: bitnami/kubectl:latest
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              # Check provision status
+              if [ -f /tmp/provision-status ]; then
+                STATUS=$(cat /tmp/provision-status)
+              else
+                STATUS="SKIP"
+              fi
+
+              if [ "$STATUS" = "READY" ]; then
+                echo "Labeling node $NODE_NAME as KVM-enabled..."
+
+                kubectl label nodes "$NODE_NAME" \
+                  aetherium.io/kvm-enabled=true \
+                  aetherium.io/firecracker=true \
+                  --overwrite
+
+                echo "OK: Node labeled"
+              else
+                echo "INFO: Node $NODE_NAME does not have KVM - removing labels if present"
+
+                kubectl label nodes "$NODE_NAME" \
+                  aetherium.io/kvm-enabled- \
+                  aetherium.io/firecracker- \
+                  2>/dev/null || true
+              fi
+
+          volumeMounts:
+            - name: provision-status
+              mountPath: /tmp
+
+      containers:
+        # =======================================================================
+        # Main container: Monitor and maintain node readiness
+        # =======================================================================
+        - name: monitor
+          image: {{ .Values.nodeProvisioner.image | default "alpine:3.19" }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Node provisioner running - monitoring node health..."
+
+              while true; do
+                # Check if KVM is still available
+                if [ -e /host/dev/kvm ]; then
+                  # Verify Firecracker assets
+                  if [ -x /host/usr/local/bin/firecracker ] && \
+                     [ -f /host/var/firecracker/vmlinux ]; then
+                    echo "$(date): Node healthy - KVM and Firecracker ready"
+                  else
+                    echo "$(date): WARNING - Firecracker assets missing"
+                  fi
+                else
+                  echo "$(date): INFO - KVM not available on this node"
+                fi
+
+                sleep 300  # Check every 5 minutes
+              done
+
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "32Mi"
+              cpu: "50m"
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: provision-status
+          emptyDir: {}
+
+---
+# ServiceAccount for node labeling
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "aetherium.fullname" . }}-node-provisioner
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+
+---
+# ClusterRole for node labeling
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aetherium.fullname" . }}-node-provisioner
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch", "update"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aetherium.fullname" . }}-node-provisioner
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aetherium.fullname" . }}-node-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aetherium.fullname" . }}-node-provisioner
+    namespace: {{ .Release.Namespace }}
+{{- end }}

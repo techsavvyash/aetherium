@@ -7,6 +7,7 @@ This guide covers deploying Aetherium to Kubernetes using Helm charts and Pulumi
 - [Architecture Overview](#architecture-overview)
 - [Prerequisites](#prerequisites)
 - [Bare-Metal Node Setup](#bare-metal-node-setup)
+- [Auto-Scaling Setup](#auto-scaling-setup)
 - [Quick Start](#quick-start)
 - [Service Discovery with Consul](#service-discovery-with-consul)
 - [Helm Chart](#helm-chart)
@@ -164,6 +165,126 @@ kubectl get nodes --show-labels | grep aetherium
 ├── vmlinux           # Kernel (5.10.x with vsock)
 ├── rootfs.ext4       # Root filesystem
 └── firecracker       # Binary (optional, can be in /usr/local/bin)
+```
+
+## Auto-Scaling Setup
+
+For production deployments with auto-scaling, nodes are **automatically provisioned** by the Node Provisioner DaemonSet. No manual setup required!
+
+### How Auto-Scaling Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Auto-Scaling Flow                                │
+│                                                                          │
+│  1. Cluster Autoscaler adds new node                                    │
+│              │                                                           │
+│              ▼                                                           │
+│  2. Node Provisioner DaemonSet detects new node                         │
+│              │                                                           │
+│              ▼                                                           │
+│  3. Init container checks KVM capability                                │
+│              │                                                           │
+│              ├── No KVM → Skip node (not a worker)                      │
+│              │                                                           │
+│              ▼ Has KVM                                                   │
+│  4. Install Firecracker, download kernel                                │
+│              │                                                           │
+│              ▼                                                           │
+│  5. Label node: aetherium.io/kvm-enabled=true                          │
+│              │                                                           │
+│              ▼                                                           │
+│  6. Worker DaemonSet schedules worker pod                               │
+│              │                                                           │
+│              ▼                                                           │
+│  7. Worker registers with Consul                                        │
+│              │                                                           │
+│              ▼                                                           │
+│  8. API Gateway discovers new worker → Ready for VMs!                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Option 1: Node Provisioner DaemonSet (Recommended)
+
+Enable the Node Provisioner in Helm values:
+
+```yaml
+nodeProvisioner:
+  enabled: true
+  firecrackerVersion: "v1.7.0"
+  kernelUrl: "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+  # For rootfs, either:
+  # 1. Host your own (recommended for production)
+  rootfsUrl: "https://your-bucket.s3.amazonaws.com/aetherium/rootfs.ext4"
+  # 2. Or leave empty and build on each node (slower)
+  # rootfsUrl: ""
+```
+
+The DaemonSet:
+- Runs on **all nodes** in the cluster
+- Detects KVM capability automatically
+- Installs Firecracker and downloads kernel
+- Labels KVM-capable nodes for worker scheduling
+- Skips non-KVM nodes (cloud control plane, etc.)
+
+### Option 2: Cloud-Init / User Data
+
+For faster node startup, pre-configure nodes via cloud-init:
+
+**AWS EC2 Launch Template:**
+```bash
+# Use the provided user-data script
+cat scripts/cloud-init/worker-node-userdata.yaml
+```
+
+**Azure VMSS Custom Data:**
+```bash
+# Base64 encode the cloud-init script
+base64 scripts/cloud-init/worker-node-userdata.yaml
+```
+
+**GCP Instance Template:**
+```bash
+# Use as startup-script metadata
+gcloud compute instance-templates create aetherium-worker \
+  --metadata-from-file startup-script=scripts/cloud-init/worker-node-userdata.yaml
+```
+
+### Option 3: Pre-Baked Machine Images (Fastest)
+
+For production, create custom AMIs/images with everything pre-installed:
+
+```bash
+# 1. Build and upload rootfs to cloud storage
+sudo ./scripts/build-and-upload-rootfs.sh aws my-bucket
+
+# 2. Create a base VM with cloud-init
+# 3. Run the setup script
+# 4. Create AMI/image from the VM
+# 5. Use in your node pool configuration
+```
+
+### Rootfs Distribution
+
+The rootfs (~2GB) contains the base Ubuntu system and tools. Options:
+
+| Method | Pros | Cons |
+|--------|------|------|
+| Cloud Storage URL | Simple, works everywhere | Download on each node |
+| Pre-baked AMI | Fastest startup | Per-region AMIs needed |
+| NFS/EFS mount | Single source of truth | Network dependency |
+| Build on node | No external deps | Slow (10+ minutes) |
+
+**Recommended: Cloud Storage with CDN**
+
+```bash
+# Build and upload rootfs
+sudo ./scripts/build-and-upload-rootfs.sh aws my-aetherium-assets
+
+# Update Helm values with the URL
+# values.yaml
+nodeProvisioner:
+  rootfsUrl: "https://my-aetherium-assets.s3.amazonaws.com/aetherium-rootfs-latest.ext4"
 ```
 
 ## Quick Start
