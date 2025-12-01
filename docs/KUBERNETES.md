@@ -4,15 +4,76 @@ This guide covers deploying Aetherium to Kubernetes using Helm charts and Pulumi
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
 - [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+- [Bare-Metal Node Setup](#bare-metal-node-setup)
 - [Quick Start](#quick-start)
+- [Service Discovery with Consul](#service-discovery-with-consul)
 - [Helm Chart](#helm-chart)
 - [Pulumi Infrastructure](#pulumi-infrastructure)
-- [Node Requirements](#node-requirements)
 - [Configuration](#configuration)
 - [Operations](#operations)
 - [Troubleshooting](#troubleshooting)
+
+## Architecture Overview
+
+Aetherium uses a **bare-metal Kubernetes architecture** where:
+
+- **Workers run as K8s pods** on bare-metal nodes with direct KVM access
+- **Firecracker runs on the host** - the container is a thin wrapper around the Go binary
+- **Consul provides service discovery** - workers register themselves for the API Gateway
+- **API Gateway is containerized** - stateless, can run anywhere
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Cluster                                │
+│                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                      aetherium namespace                            │ │
+│  │                                                                      │ │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐            │ │
+│  │  │ API Gateway │    │   Consul    │    │ PostgreSQL  │            │ │
+│  │  │ (Deployment)│◄──►│(StatefulSet)│    │(StatefulSet)│            │ │
+│  │  │  Replicas:3 │    │  Service    │    │             │            │ │
+│  │  └──────┬──────┘    │  Discovery  │    └─────────────┘            │ │
+│  │         │           └──────▲──────┘                                │ │
+│  │         │                  │                                        │ │
+│  │         │           Register/Discover                               │ │
+│  │         │                  │                                        │ │
+│  └─────────┼──────────────────┼────────────────────────────────────────┘ │
+│            │                  │                                          │
+│            │    ┌─────────────┴─────────────────────────────────┐       │
+│            │    │         Bare-Metal Worker Nodes (KVM)          │       │
+│            │    │                                                 │       │
+│            │    │  ┌─────────────────────────────────────────┐   │       │
+│            │    │  │      DaemonSet: aetherium-worker        │   │       │
+│            │    │  │                                          │   │       │
+│            ▼    │  │   Node 1          Node 2          Node 3│   │       │
+│       ┌────────┐│  │   ┌──────┐       ┌──────┐       ┌──────┐│   │       │
+│       │  Task  ││  │   │Worker│       │Worker│       │Worker││   │       │
+│       │  Queue ││  │   │ Pod  │       │ Pod  │       │ Pod  ││   │       │
+│       │(Redis) ││  │   │      │       │      │       │      ││   │       │
+│       └────────┘│  │   │/dev/ │       │/dev/ │       │/dev/ ││   │       │
+│                 │  │   │ kvm  │       │ kvm  │       │ kvm  ││   │       │
+│                 │  │   └──┬───┘       └──┬───┘       └──┬───┘│   │       │
+│                 │  │      │              │              │     │   │       │
+│                 │  │   ┌──▼───┐       ┌──▼───┐       ┌──▼───┐│   │       │
+│                 │  │   │ VMs  │       │ VMs  │       │ VMs  ││   │       │
+│                 │  │   │(Fire-│       │(Fire-│       │(Fire-││   │       │
+│                 │  │   │crack)│       │crack)│       │crack)││   │       │
+│                 │  │   └──────┘       └──────┘       └──────┘│   │       │
+│                 │  └──────────────────────────────────────────┘   │       │
+│                 └─────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+1. **Workers as K8s Pods**: Managed by DaemonSet, one per KVM-enabled node
+2. **Firecracker on Host**: VMs run directly on the host via `/dev/kvm` passthrough
+3. **Host Network**: Workers use `hostNetwork: true` for VM networking (TAP/bridge)
+4. **Consul Service Discovery**: Workers register with Consul, Gateway discovers them
+5. **Privileged Containers**: Required for KVM, TAP devices, and bridge management
 
 ## Prerequisites
 
@@ -35,65 +96,83 @@ docker version
 ### Kubernetes Cluster Requirements
 
 - Kubernetes 1.25+
-- At least one node with KVM support (for Firecracker workers)
-- Persistent volume provisioner (for PostgreSQL/Redis)
+- **Bare-metal nodes** with KVM support (for workers)
+- Persistent volume provisioner (for PostgreSQL/Redis/Consul)
 - Optional: Ingress controller (nginx-ingress recommended)
 
-## Architecture Overview
+## Bare-Metal Node Setup
 
+### Step 1: Verify KVM Support
+
+On each worker node:
+
+```bash
+# Check KVM device
+ls -la /dev/kvm
+
+# Check vhost-vsock (for VM communication)
+ls -la /dev/vhost-vsock
+
+# If missing, load modules
+sudo modprobe kvm
+sudo modprobe kvm_intel  # or kvm_amd
+sudo modprobe vhost_vsock
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Kubernetes Cluster                            │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    aetherium namespace                    │   │
-│  │                                                           │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │   │
-│  │  │ API Gateway │  │ API Gateway │  │ API Gateway │      │   │
-│  │  │  (replica)  │  │  (replica)  │  │  (replica)  │      │   │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘      │   │
-│  │         └────────────────┼────────────────┘              │   │
-│  │                          ▼                                │   │
-│  │                   ┌─────────────┐                        │   │
-│  │                   │   Service   │                        │   │
-│  │                   │ (ClusterIP) │                        │   │
-│  │                   └──────┬──────┘                        │   │
-│  │                          │                                │   │
-│  └──────────────────────────┼────────────────────────────────┘   │
-│                             │                                    │
-│  ┌──────────────────────────┼────────────────────────────────┐   │
-│  │           Worker Nodes (KVM-enabled)                       │   │
-│  │                          │                                 │   │
-│  │  ┌───────────────────────┼───────────────────────────┐    │   │
-│  │  │         DaemonSet: aetherium-worker               │    │   │
-│  │  │                       │                            │    │   │
-│  │  │  Node 1           Node 2           Node 3         │    │   │
-│  │  │  ┌──────┐         ┌──────┐         ┌──────┐      │    │   │
-│  │  │  │Worker│         │Worker│         │Worker│      │    │   │
-│  │  │  │ Pod  │         │ Pod  │         │ Pod  │      │    │   │
-│  │  │  │ /kvm │         │ /kvm │         │ /kvm │      │    │   │
-│  │  │  └──────┘         └──────┘         └──────┘      │    │   │
-│  │  │     │                 │                 │          │    │   │
-│  │  │  ┌──┴──┐           ┌──┴──┐           ┌──┴──┐     │    │   │
-│  │  │  │VMs  │           │VMs  │           │VMs  │     │    │   │
-│  │  │  └─────┘           └─────┘           └─────┘     │    │   │
-│  │  └────────────────────────────────────────────────────┘    │   │
-│  └────────────────────────────────────────────────────────────┘   │
-│                                                                   │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │                   Data Layer                              │    │
-│  │  ┌─────────────────┐      ┌─────────────────┐           │    │
-│  │  │   PostgreSQL    │      │      Redis      │           │    │
-│  │  │  (StatefulSet)  │      │  (StatefulSet)  │           │    │
-│  │  │    + PVC        │      │     + PVC       │           │    │
-│  │  └─────────────────┘      └─────────────────┘           │    │
-│  └──────────────────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────────────────┘
+
+### Step 2: Install Firecracker
+
+```bash
+# Download and install Firecracker
+FIRECRACKER_VERSION=v1.7.0
+curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" | tar -xz
+sudo mv release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64 /usr/local/bin/firecracker
+sudo chmod +x /usr/local/bin/firecracker
+```
+
+### Step 3: Prepare Firecracker Assets
+
+```bash
+# Create directory
+sudo mkdir -p /var/firecracker
+
+# Download kernel with vsock support
+sudo curl -fsSL -o /var/firecracker/vmlinux \
+  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+
+# Prepare rootfs (run from aetherium repo)
+sudo ./scripts/prepare-rootfs-with-tools.sh
+```
+
+### Step 4: Label Node for Aetherium
+
+```bash
+# Label node as KVM-enabled
+kubectl label nodes <node-name> aetherium.io/kvm-enabled=true
+
+# Optional: Dedicate node to workers
+kubectl taint nodes <node-name> aetherium.io/worker=true:NoSchedule
+```
+
+### Step 5: Verify Node Setup
+
+```bash
+# Check node labels
+kubectl get nodes --show-labels | grep aetherium
+
+# Expected directory structure on node:
+/var/firecracker/
+├── vmlinux           # Kernel (5.10.x with vsock)
+├── rootfs.ext4       # Root filesystem
+└── firecracker       # Binary (optional, can be in /usr/local/bin)
 ```
 
 ## Quick Start
 
-### 1. Build and Push Docker Images
+### 1. Prepare Worker Nodes
+
+Follow [Bare-Metal Node Setup](#bare-metal-node-setup) on each worker node.
+
+### 2. Build and Push Docker Images
 
 ```bash
 # Build all images
@@ -103,7 +182,7 @@ docker version
 ./scripts/build-images.sh v1.0.0 push
 ```
 
-### 2. Deploy with Helm
+### 3. Deploy with Helm
 
 ```bash
 # Development environment
@@ -113,14 +192,67 @@ docker version
 ./scripts/deploy-k8s.sh prod deploy
 ```
 
-### 3. Verify Deployment
+### 4. Verify Deployment
 
 ```bash
 # Check status
 ./scripts/deploy-k8s.sh dev status
 
+# Check worker pods
+kubectl get pods -n aetherium -l app.kubernetes.io/component=worker
+
+# Check Consul UI
+kubectl port-forward svc/aetherium-consul 8500:8500 -n aetherium
+# Open http://localhost:8500
+
 # Port forward to access API
-kubectl port-forward svc/aetherium-api-gateway 8080:8080 -n aetherium-dev
+kubectl port-forward svc/aetherium-api-gateway 8080:8080 -n aetherium
+```
+
+## Service Discovery with Consul
+
+Workers automatically register with Consul on startup and deregister on shutdown.
+
+### How It Works
+
+1. **Worker starts** → Runs pre-flight checks (KVM, Firecracker assets)
+2. **Network setup** → Creates bridge, enables IP forwarding
+3. **Consul registration** → Registers as `aetherium-worker` service
+4. **Health checks** → Consul monitors worker health endpoint
+5. **API Gateway** → Discovers workers via Consul catalog
+
+### Consul Service Registration
+
+Workers register with these metadata:
+
+```json
+{
+  "ID": "aetherium-worker-<node-name>",
+  "Name": "aetherium-worker",
+  "Tags": ["worker", "firecracker", "kvm"],
+  "Address": "<pod-ip>",
+  "Port": 8081,
+  "Meta": {
+    "node": "<node-name>",
+    "kvm_enabled": "true"
+  },
+  "Check": {
+    "HTTP": "http://<pod-ip>:8081/health",
+    "Interval": "10s"
+  }
+}
+```
+
+### Discovering Workers
+
+From API Gateway or any service:
+
+```bash
+# List all workers
+curl http://consul:8500/v1/catalog/service/aetherium-worker
+
+# Get healthy workers only
+curl http://consul:8500/v1/health/service/aetherium-worker?passing=true
 ```
 
 ## Helm Chart
@@ -133,16 +265,16 @@ helm/aetherium/
 ├── values.yaml             # Default values
 ├── values-production.yaml  # Production overrides
 └── templates/
-    ├── _helpers.tpl        # Template helpers
-    ├── configmap.yaml      # Application config
-    ├── secrets.yaml        # Secrets
-    ├── serviceaccount.yaml # Service account
+    ├── _helpers.tpl
+    ├── configmap.yaml
+    ├── secrets.yaml
+    ├── serviceaccount.yaml
     ├── api-gateway-deployment.yaml
     ├── api-gateway-service.yaml
     ├── api-gateway-ingress.yaml
     ├── worker-daemonset.yaml
-    ├── worker-deployment.yaml
-    └── NOTES.txt           # Post-install notes
+    ├── consul-statefulset.yaml
+    └── NOTES.txt
 ```
 
 ### Installation
@@ -159,31 +291,7 @@ helm install aetherium ./helm/aetherium -n aetherium --create-namespace
 helm install aetherium ./helm/aetherium \
   -n aetherium \
   --create-namespace \
-  -f ./helm/aetherium/values-production.yaml \
-  --set secrets.postgres.password=my-secure-password
-```
-
-### Upgrade
-
-```bash
-# Upgrade with new values
-helm upgrade aetherium ./helm/aetherium -n aetherium \
   -f ./helm/aetherium/values-production.yaml
-
-# Upgrade with specific image tag
-helm upgrade aetherium ./helm/aetherium -n aetherium \
-  --set apiGateway.image.tag=v1.1.0 \
-  --set worker.image.tag=v1.1.0
-```
-
-### Rollback
-
-```bash
-# Rollback to previous revision
-helm rollback aetherium -n aetherium
-
-# Rollback to specific revision
-helm rollback aetherium 3 -n aetherium
 ```
 
 ### Key Values
@@ -192,11 +300,21 @@ helm rollback aetherium 3 -n aetherium
 |-----------|-------------|---------|
 | `global.environment` | Environment name | `development` |
 | `apiGateway.replicaCount` | API Gateway replicas | `1` |
-| `apiGateway.service.type` | Service type | `ClusterIP` |
-| `worker.kind` | Worker kind (DaemonSet/Deployment) | `DaemonSet` |
-| `worker.hostNetwork` | Use host network | `true` |
+| `worker.kind` | Worker kind | `DaemonSet` |
+| `worker.nodeSelector` | Node selector for workers | `aetherium.io/kvm-enabled: "true"` |
+| `consul.enabled` | Deploy Consul | `true` |
 | `postgresql.enabled` | Deploy PostgreSQL | `true` |
 | `redis.enabled` | Deploy Redis | `true` |
+
+### Worker DaemonSet Configuration
+
+The worker DaemonSet:
+- Runs **one pod per KVM-enabled node**
+- Uses **host network** for VM networking
+- Mounts **/dev/kvm** and **/dev/vhost-vsock**
+- Mounts **/var/firecracker** for kernel/rootfs
+- Runs **privileged** for TAP/bridge management
+- Has **init container** to verify prerequisites
 
 ## Pulumi Infrastructure
 
@@ -215,7 +333,7 @@ pulumi login
 pulumi stack select dev  # or: staging, prod
 ```
 
-### Deploy Infrastructure
+### Deploy
 
 ```bash
 # Preview changes
@@ -224,79 +342,19 @@ pulumi preview
 # Deploy
 pulumi up
 
-# Destroy (careful!)
-pulumi destroy
+# View outputs
+pulumi stack output
 ```
 
-### Stack Configuration
+### Modules
 
-**Development (Pulumi.dev.yaml):**
-```yaml
-config:
-  aetherium-infra:environment: development
-  kubernetes:clusterName: aetherium-dev
-  kubernetes:nodeCount: "1"
-  cloud:provider: local
-```
-
-**Production (Pulumi.prod.yaml):**
-```yaml
-config:
-  aetherium-infra:environment: production
-  kubernetes:clusterName: aetherium-prod
-  kubernetes:nodeCount: "5"
-  kubernetes:nodeSize: Standard_D8s_v3
-  cloud:provider: azure
-```
-
-## Node Requirements
-
-### KVM-Enabled Nodes
-
-Workers require KVM access for Firecracker VMs. Label appropriate nodes:
-
-```bash
-# Label nodes with KVM support
-kubectl label nodes <node-name> aetherium.io/kvm-enabled=true
-
-# Verify KVM is available (on the node)
-ls -la /dev/kvm
-ls -la /dev/vhost-vsock
-```
-
-### Node Preparation
-
-On each worker node, ensure:
-
-1. **KVM Module Loaded:**
-```bash
-sudo modprobe kvm
-sudo modprobe kvm_intel  # or kvm_amd
-```
-
-2. **Vsock Module Loaded:**
-```bash
-sudo modprobe vhost_vsock
-```
-
-3. **Firecracker Assets:**
-```bash
-# Directory structure
-/var/firecracker/
-├── vmlinux           # Kernel with vsock support
-└── rootfs.ext4       # Root filesystem template
-```
-
-### Taint Worker Nodes (Optional)
-
-To dedicate nodes to Aetherium workers:
-
-```bash
-# Taint node
-kubectl taint nodes <node-name> aetherium.io/worker=true:NoSchedule
-
-# The Helm chart includes matching tolerations
-```
+| Module | Description |
+|--------|-------------|
+| `index.ts` | Main entry point |
+| `namespace.ts` | Creates K8s namespace |
+| `infrastructure.ts` | PostgreSQL, Redis, Consul |
+| `aetherium.ts` | Helm deployment |
+| `bare-metal.ts` | Node preparation DaemonSet |
 
 ## Configuration
 
@@ -305,7 +363,6 @@ kubectl taint nodes <node-name> aetherium.io/worker=true:NoSchedule
 For production, use managed databases:
 
 ```yaml
-# values-production.yaml
 postgresql:
   enabled: false
   external:
@@ -313,15 +370,18 @@ postgresql:
     port: 5432
     database: aetherium
     existingSecret: postgres-credentials
-
-redis:
-  enabled: false
-  external:
-    host: aetherium-cache.redis.cache.windows.net
-    port: 6380
 ```
 
-### Ingress Configuration
+### External Consul
+
+```yaml
+consul:
+  enabled: false
+  external:
+    addr: consul.example.com:8500
+```
+
+### Ingress with TLS
 
 ```yaml
 apiGateway:
@@ -341,108 +401,105 @@ apiGateway:
           - aetherium.example.com
 ```
 
-### Resource Limits
-
-```yaml
-apiGateway:
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "250m"
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-
-worker:
-  resources:
-    requests:
-      memory: "1Gi"
-      cpu: "1000m"
-    limits:
-      memory: "4Gi"
-      cpu: "4000m"
-```
-
 ## Operations
 
-### Scaling
+### Scaling Workers
+
+Workers scale by adding KVM-enabled nodes:
 
 ```bash
-# Scale API Gateway (if using Deployment)
-kubectl scale deployment aetherium-api-gateway -n aetherium --replicas=5
-
-# Workers scale automatically with DaemonSet (add more KVM nodes)
+# Add new node to cluster
+# Then label it
 kubectl label nodes new-node aetherium.io/kvm-enabled=true
+
+# DaemonSet automatically deploys worker
+kubectl get pods -n aetherium -l app.kubernetes.io/component=worker -o wide
 ```
 
-### Monitoring
+### Monitoring Workers via Consul
 
 ```bash
-# View logs
-kubectl logs -n aetherium -l app.kubernetes.io/component=api-gateway -f
+# List all registered workers
+kubectl exec -n aetherium aetherium-consul-0 -- \
+  consul catalog services
+
+# Check worker health
+kubectl exec -n aetherium aetherium-consul-0 -- \
+  consul members
+
+# View Consul UI
+kubectl port-forward svc/aetherium-consul 8500:8500 -n aetherium
+```
+
+### Logs
+
+```bash
+# Worker logs
 kubectl logs -n aetherium -l app.kubernetes.io/component=worker -f
 
-# Check resource usage
-kubectl top pods -n aetherium
+# API Gateway logs
+kubectl logs -n aetherium -l app.kubernetes.io/component=api-gateway -f
 
-# View events
-kubectl get events -n aetherium --sort-by='.lastTimestamp'
-```
-
-### Backup
-
-```bash
-# Backup PostgreSQL
-kubectl exec -n aetherium aetherium-postgresql-0 -- \
-  pg_dump -U aetherium aetherium > backup.sql
-
-# Backup configuration
-helm get values aetherium -n aetherium > values-backup.yaml
+# Consul logs
+kubectl logs -n aetherium aetherium-consul-0 -f
 ```
 
 ## Troubleshooting
 
-### Worker Pod CrashLoopBackOff
+### Worker Pod Stuck in Init
 
-1. Check if KVM is available:
+The init container verifies KVM and Firecracker assets:
+
 ```bash
-kubectl exec -n aetherium -it <worker-pod> -- ls -la /dev/kvm
+# Check init container logs
+kubectl logs -n aetherium <worker-pod> -c verify-host
+
+# Common issues:
+# - /dev/kvm not found → Enable KVM on host
+# - Kernel not found → Run download-vsock-kernel.sh
+# - Rootfs not found → Run prepare-rootfs-with-tools.sh
 ```
 
-2. Check for missing Firecracker assets:
+### Worker Not Registering with Consul
+
 ```bash
-kubectl exec -n aetherium -it <worker-pod> -- ls -la /var/firecracker/
+# Check worker logs for Consul registration
+kubectl logs -n aetherium <worker-pod> | grep -i consul
+
+# Verify Consul is reachable
+kubectl exec -n aetherium <worker-pod> -- \
+  curl -s http://aetherium-consul:8500/v1/status/leader
+
+# Check environment variables
+kubectl exec -n aetherium <worker-pod> -- env | grep CONSUL
 ```
 
-3. View worker logs:
+### VM Creation Fails
+
 ```bash
-kubectl logs -n aetherium <worker-pod> --previous
+# Check worker logs
+kubectl logs -n aetherium <worker-pod> | grep -i firecracker
+
+# Verify KVM access inside pod
+kubectl exec -n aetherium <worker-pod> -- ls -la /dev/kvm
+
+# Check Firecracker assets
+kubectl exec -n aetherium <worker-pod> -- ls -la /var/firecracker/
 ```
 
 ### Network Issues
 
-1. Workers use host network; check node firewall rules
-2. Verify bridge interface exists on worker nodes:
-```bash
-kubectl exec -n aetherium -it <worker-pod> -- ip addr show aetherium0
-```
+Workers use host network for VM TAP devices:
 
-### PostgreSQL Connection Issues
-
-1. Check PostgreSQL pod status:
 ```bash
-kubectl get pods -n aetherium -l app.kubernetes.io/name=postgresql
-```
+# Verify host network
+kubectl exec -n aetherium <worker-pod> -- ip addr
 
-2. Verify credentials:
-```bash
-kubectl get secret -n aetherium postgres-credentials -o yaml
-```
+# Check bridge
+kubectl exec -n aetherium <worker-pod> -- ip link show aetherium0
 
-3. Test connection from API Gateway:
-```bash
-kubectl exec -n aetherium -it <api-gateway-pod> -- \
-  nc -zv postgres 5432
+# Check NAT rules
+kubectl exec -n aetherium <worker-pod> -- iptables -t nat -L
 ```
 
 ### Common Commands
@@ -451,9 +508,8 @@ kubectl exec -n aetherium -it <api-gateway-pod> -- \
 # Full status check
 ./scripts/deploy-k8s.sh <env> status
 
-# Restart all pods
-kubectl rollout restart deployment -n aetherium
-kubectl rollout restart daemonset -n aetherium
+# Restart workers
+kubectl rollout restart daemonset/aetherium-worker -n aetherium
 
 # Force delete stuck pod
 kubectl delete pod <pod> -n aetherium --force --grace-period=0

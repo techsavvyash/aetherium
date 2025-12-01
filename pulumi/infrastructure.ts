@@ -18,11 +18,16 @@ export interface RedisOutput {
     port: number;
 }
 
+export interface ConsulOutput {
+    serviceName: pulumi.Output<string>;
+    port: number;
+}
+
 export interface InfrastructureOutput {
     postgres: PostgresOutput;
     redis: RedisOutput;
+    consul?: ConsulOutput;
     loki?: k8s.apps.v1.StatefulSet;
-    consul?: k8s.apps.v1.StatefulSet;
 }
 
 export function deployInfrastructure(
@@ -199,6 +204,116 @@ export function deployInfrastructure(
         },
     });
 
+    // ==========================================================================
+    // Consul - Service Discovery for Workers
+    // ==========================================================================
+    let consul: ConsulOutput | undefined;
+    if (options.enableConsul !== false) { // Enable by default
+        const consulStatefulSet = new k8s.apps.v1.StatefulSet("consul", {
+            metadata: {
+                name: "consul",
+                namespace: namespace,
+                labels: { ...labels, "app.kubernetes.io/name": "consul" },
+            },
+            spec: {
+                serviceName: "consul",
+                replicas: 1,
+                selector: {
+                    matchLabels: { app: "consul" },
+                },
+                template: {
+                    metadata: {
+                        labels: { app: "consul", ...labels },
+                    },
+                    spec: {
+                        containers: [{
+                            name: "consul",
+                            image: "hashicorp/consul:1.17",
+                            ports: [
+                                { containerPort: 8500, name: "http" },
+                                { containerPort: 8600, name: "dns-tcp", protocol: "TCP" },
+                                { containerPort: 8600, name: "dns-udp", protocol: "UDP" },
+                                { containerPort: 8301, name: "serf-lan" },
+                                { containerPort: 8302, name: "serf-wan" },
+                                { containerPort: 8300, name: "server" },
+                            ],
+                            args: [
+                                "agent",
+                                "-server",
+                                "-bootstrap-expect=1",
+                                "-ui",
+                                "-client=0.0.0.0",
+                                "-data-dir=/consul/data",
+                                "-datacenter=dc1",
+                            ],
+                            env: [{
+                                name: "POD_IP",
+                                valueFrom: {
+                                    fieldRef: { fieldPath: "status.podIP" },
+                                },
+                            }],
+                            volumeMounts: [{
+                                name: "consul-data",
+                                mountPath: "/consul/data",
+                            }],
+                            resources: {
+                                requests: { memory: "128Mi", cpu: "100m" },
+                                limits: { memory: "256Mi", cpu: "250m" },
+                            },
+                            livenessProbe: {
+                                httpGet: {
+                                    path: "/v1/status/leader",
+                                    port: "http",
+                                },
+                                initialDelaySeconds: 30,
+                                periodSeconds: 10,
+                            },
+                            readinessProbe: {
+                                httpGet: {
+                                    path: "/v1/status/leader",
+                                    port: "http",
+                                },
+                                initialDelaySeconds: 10,
+                                periodSeconds: 5,
+                            },
+                        }],
+                    },
+                },
+                volumeClaimTemplates: [{
+                    metadata: { name: "consul-data" },
+                    spec: {
+                        accessModes: ["ReadWriteOnce"],
+                        resources: {
+                            requests: { storage: "1Gi" },
+                        },
+                    },
+                }],
+            },
+        });
+
+        const consulService = new k8s.core.v1.Service("consul-service", {
+            metadata: {
+                name: "consul",
+                namespace: namespace,
+                labels: { ...labels, "app.kubernetes.io/name": "consul" },
+            },
+            spec: {
+                type: "ClusterIP",
+                ports: [
+                    { port: 8500, targetPort: 8500, name: "http" },
+                    { port: 8600, targetPort: 8600, name: "dns-tcp", protocol: "TCP" },
+                    { port: 8600, targetPort: 8600, name: "dns-udp", protocol: "UDP" },
+                ],
+                selector: { app: "consul" },
+            },
+        });
+
+        consul = {
+            serviceName: consulService.metadata.name,
+            port: 8500,
+        };
+    }
+
     // Optional: Loki for logging
     let loki: k8s.apps.v1.StatefulSet | undefined;
     if (options.enableLoki) {
@@ -271,6 +386,7 @@ export function deployInfrastructure(
             serviceName: redisService.metadata.name,
             port: 6379,
         },
+        consul,
         loki,
     };
 }

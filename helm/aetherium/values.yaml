@@ -11,7 +11,9 @@ global:
   # Image pull secrets
   imagePullSecrets: []
 
-# API Gateway configuration
+# =============================================================================
+# API Gateway Configuration
+# =============================================================================
 apiGateway:
   enabled: true
   replicaCount: 1
@@ -43,12 +45,9 @@ apiGateway:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  # Environment variables
   env: []
-  # Extra volume mounts
   extraVolumeMounts: []
   extraVolumes: []
-  # Probes
   livenessProbe:
     httpGet:
       path: /health
@@ -62,90 +61,85 @@ apiGateway:
     initialDelaySeconds: 5
     periodSeconds: 5
 
-# Worker configuration
+# =============================================================================
+# Worker Configuration (Bare-Metal K8s Pods)
+# =============================================================================
+# Workers run as K8s pods on bare-metal nodes with KVM access.
+# Firecracker runs directly on the host - the container is a thin wrapper.
 worker:
   enabled: true
-  # Use DaemonSet for workers (one per KVM-enabled node)
+  # DaemonSet ensures one worker per KVM-enabled node
   kind: DaemonSet
-  # Or use Deployment with specific replica count
+  # Alternative: Use Deployment for manual control
   # kind: Deployment
   # replicaCount: 3
+
   image:
     repository: aetherium/worker
     tag: latest
     pullPolicy: IfNotPresent
-  # Workers need privileged access for Firecracker
-  securityContext:
-    privileged: true
-    capabilities:
-      add:
-        - NET_ADMIN
-        - SYS_ADMIN
-  # Only schedule on KVM-enabled nodes
+
+  # Only schedule on KVM-enabled bare-metal nodes
+  # Label your nodes: kubectl label nodes <node> aetherium.io/kvm-enabled=true
   nodeSelector:
     aetherium.io/kvm-enabled: "true"
+
   tolerations:
     - key: "aetherium.io/worker"
       operator: "Exists"
       effect: "NoSchedule"
+
   affinity: {}
-  # Use host network for VM networking
-  hostNetwork: true
-  dnsPolicy: ClusterFirstWithHostNet
+
+  # Grace period for VM cleanup on shutdown
+  terminationGracePeriodSeconds: 120
+
+  # Host PID namespace (usually not needed)
+  hostPID: false
+
   resources:
     requests:
       memory: "512Mi"
       cpu: "500m"
     limits:
-      memory: "2Gi"
-      cpu: "2000m"
-  # Required volumes for Firecracker
-  volumes:
-    - name: dev-kvm
-      hostPath:
-        path: /dev/kvm
-        type: CharDevice
-    - name: dev-vhost-vsock
-      hostPath:
-        path: /dev/vhost-vsock
-        type: CharDevice
-    - name: firecracker-data
-      hostPath:
-        path: /var/firecracker
-        type: DirectoryOrCreate
-    - name: vm-sockets
-      hostPath:
-        path: /tmp/aetherium-sockets
-        type: DirectoryOrCreate
-  volumeMounts:
-    - name: dev-kvm
-      mountPath: /dev/kvm
-    - name: dev-vhost-vsock
-      mountPath: /dev/vhost-vsock
-    - name: firecracker-data
-      mountPath: /var/firecracker
-    - name: vm-sockets
-      mountPath: /tmp
-  env: []
-  # Probes
-  livenessProbe:
-    exec:
-      command:
-        - /bin/sh
-        - -c
-        - "pgrep worker"
-    initialDelaySeconds: 30
-    periodSeconds: 30
-  readinessProbe:
-    exec:
-      command:
-        - /bin/sh
-        - -c
-        - "test -S /tmp/aetherium-worker.sock || pgrep worker"
-    initialDelaySeconds: 10
-    periodSeconds: 10
+      memory: "4Gi"
+      cpu: "4000m"
 
-# PostgreSQL configuration
+  env: []
+
+# =============================================================================
+# Consul Configuration (Service Discovery)
+# =============================================================================
+# Consul enables workers to register themselves and be discovered by the
+# API Gateway for task distribution.
+consul:
+  enabled: true
+  image:
+    repository: hashicorp/consul
+    tag: "1.17"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  datacenter: dc1
+  service:
+    type: ClusterIP
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+  nodeSelector: {}
+  # External Consul (when enabled: false)
+  external:
+    addr: ""
+
+# =============================================================================
+# PostgreSQL Configuration
+# =============================================================================
 postgresql:
   enabled: true
   auth:
@@ -163,7 +157,7 @@ postgresql:
       limits:
         memory: "1Gi"
         cpu: "1000m"
-  # External PostgreSQL configuration (when enabled: false)
+  # External PostgreSQL (when enabled: false)
   external:
     host: ""
     port: 5432
@@ -173,7 +167,9 @@ postgresql:
       username: username
       password: password
 
-# Redis configuration
+# =============================================================================
+# Redis Configuration
+# =============================================================================
 redis:
   enabled: true
   architecture: standalone
@@ -190,13 +186,15 @@ redis:
       limits:
         memory: "512Mi"
         cpu: "500m"
-  # External Redis configuration (when enabled: false)
+  # External Redis (when enabled: false)
   external:
     host: ""
     port: 6379
     password: ""
 
-# Loki configuration (for centralized logging)
+# =============================================================================
+# Loki Configuration (Centralized Logging)
+# =============================================================================
 loki:
   enabled: false
   url: ""
@@ -204,22 +202,25 @@ loki:
     enabled: true
     size: 10Gi
 
-# Application configuration
+# =============================================================================
+# Application Configuration
+# =============================================================================
 config:
-  # VMM Provider configuration
+  # VMM Provider - Firecracker on bare-metal
   vmm:
     provider: firecracker
     firecracker:
+      # These paths are on the HOST, mounted into the worker pod
       kernelPath: /var/firecracker/vmlinux
       rootfsTemplate: /var/firecracker/rootfs.ext4
-      socketDir: /tmp
+      socketDir: /run/aetherium
       defaultVcpu: 1
       defaultMemoryMb: 256
     docker:
       socketPath: /var/run/docker.sock
       defaultImage: ubuntu:22.04
 
-  # Queue configuration
+  # Queue (Asynq/Redis)
   queue:
     provider: asynq
     concurrency: 10
@@ -229,13 +230,13 @@ config:
       default: 5
       low: 2
 
-  # Logging configuration
+  # Logging
   logging:
     provider: stdout
     level: info
     lokiUrl: ""
 
-  # Tools configuration
+  # Default tools installed in VMs
   tools:
     default:
       - git
@@ -244,17 +245,21 @@ config:
       - claude-code
     installTimeout: 20m
 
-  # Server configuration
+  # Server settings
   server:
     host: "0.0.0.0"
     port: 8080
     gracefulShutdown: 30s
 
-# Network policies
+# =============================================================================
+# Network Policies
+# =============================================================================
 networkPolicies:
   enabled: false
 
-# Pod disruption budgets
+# =============================================================================
+# Pod Disruption Budgets
+# =============================================================================
 podDisruptionBudget:
   apiGateway:
     enabled: false
@@ -263,34 +268,39 @@ podDisruptionBudget:
     enabled: false
     minAvailable: 1
 
-# Service account
+# =============================================================================
+# Service Account
+# =============================================================================
 serviceAccount:
   create: true
   name: ""
   annotations: {}
 
-# ConfigMap for Aetherium configuration
+# =============================================================================
+# ConfigMap
+# =============================================================================
 configMap:
   create: true
   name: ""
 
+# =============================================================================
 # Secrets
+# =============================================================================
 secrets:
   create: true
-  # PostgreSQL credentials
   postgres:
     username: aetherium
     password: aetherium
-  # GitHub integration
   github:
     token: ""
     webhookSecret: ""
-  # Slack integration
   slack:
     botToken: ""
     appToken: ""
 
-# Metrics and monitoring
+# =============================================================================
+# Metrics and Monitoring
+# =============================================================================
 metrics:
   enabled: false
   serviceMonitor:
