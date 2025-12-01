@@ -471,7 +471,7 @@ func (s *Server) smartExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Strategy 2: If prefer existing and no specific VM, find any running VM
-	if selectedVM == nil && (req.PreferExisting || req.VMName == "") {
+	if selectedVM == nil && req.PreferExisting {
 		vms, err := s.taskService.ListVMs(r.Context())
 		if err == nil && len(vms) > 0 {
 			// Find first running VM

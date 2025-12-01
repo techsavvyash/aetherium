@@ -1,10 +1,13 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os/exec"
 	"sync"
+
+	"github.com/aetherium/aetherium/pkg/config"
 )
 
 // NetworkConfig holds network configuration
@@ -22,6 +25,7 @@ type Manager struct {
 	config       NetworkConfig
 	tapDevices   map[string]*TAPDevice
 	ipAllocator  *IPAllocator
+	proxyManager *ProxyManager
 	mu           sync.Mutex
 	bridgeSetup  bool
 }
@@ -58,6 +62,35 @@ func NewManager(config NetworkConfig) (*Manager, error) {
 			nextOffset: 2, // Start from .2 (.1 is gateway)
 		},
 	}, nil
+}
+
+// NewManagerWithProxy creates a new network manager with proxy support
+func NewManagerWithProxy(netConfig NetworkConfig, proxyConfig config.ProxyConfig) (*Manager, error) {
+	_, subnet, err := net.ParseCIDR(netConfig.SubnetCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("invalid subnet CIDR: %w", err)
+	}
+
+	manager := &Manager{
+		config:      netConfig,
+		tapDevices:  make(map[string]*TAPDevice),
+		ipAllocator: &IPAllocator{
+			subnet:     subnet,
+			allocated:  make(map[string]bool),
+			nextOffset: 2, // Start from .2 (.1 is gateway)
+		},
+	}
+
+	// Initialize proxy manager if enabled
+	if proxyConfig.Enabled {
+		proxyMgr, err := NewProxyManager(proxyConfig, netConfig.BridgeIP, netConfig.SubnetCIDR)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create proxy manager: %w", err)
+		}
+		manager.proxyManager = proxyMgr
+	}
+
+	return manager, nil
 }
 
 // SetupBridge creates and configures the bridge interface
@@ -109,6 +142,14 @@ func (m *Manager) SetupBridge() error {
 	if m.config.EnableNAT {
 		if err := m.setupNAT(); err != nil {
 			return fmt.Errorf("failed to setup NAT: %w", err)
+		}
+	}
+
+	// Start proxy if enabled
+	if m.proxyManager != nil {
+		ctx := context.Background()
+		if err := m.proxyManager.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start proxy: %w", err)
 		}
 	}
 
@@ -329,4 +370,93 @@ func generateMAC(vmID string) string {
 		byte((hash>>16)&0xFF),
 		byte((hash>>8)&0xFF),
 		byte(hash&0xFF))
+}
+
+// Proxy-related methods
+
+// RegisterVMWithProxy registers a VM with the proxy whitelist
+func (m *Manager) RegisterVMWithProxy(vmID, vmName string, domains []string) error {
+	m.mu.Lock()
+	tap, exists := m.tapDevices[vmID]
+	m.mu.Unlock()
+
+	if !exists {
+		return fmt.Errorf("VM %s not found", vmID)
+	}
+
+	if m.proxyManager == nil {
+		return nil // Proxy not enabled
+	}
+
+	// Extract IP without /24 suffix
+	vmIP := tap.IPAddress
+	if idx := len(vmIP) - 3; idx > 0 && vmIP[idx:] == "/24" {
+		vmIP = vmIP[:idx]
+	}
+
+	return m.proxyManager.UpdateVMWhitelist(vmID, vmName, vmIP, domains)
+}
+
+// UnregisterVMFromProxy removes a VM from the proxy whitelist
+func (m *Manager) UnregisterVMFromProxy(vmID string) error {
+	if m.proxyManager == nil {
+		return nil // Proxy not enabled
+	}
+
+	if m.proxyManager.squidManager != nil {
+		if err := m.proxyManager.squidManager.RemoveVMWhitelist(vmID); err != nil {
+			return err
+		}
+		return m.proxyManager.Reload()
+	}
+
+	return nil
+}
+
+// UpdateGlobalWhitelist updates the global proxy whitelist
+func (m *Manager) UpdateGlobalWhitelist(domains []string) error {
+	if m.proxyManager == nil {
+		return nil // Proxy not enabled
+	}
+
+	return m.proxyManager.UpdateWhitelist(domains)
+}
+
+// GetProxyStats returns proxy statistics
+func (m *Manager) GetProxyStats() (*ProxyStats, error) {
+	if m.proxyManager == nil {
+		return &ProxyStats{}, nil
+	}
+
+	return m.proxyManager.GetStats()
+}
+
+// GetProxyHealth checks proxy health
+func (m *Manager) GetProxyHealth() error {
+	if m.proxyManager == nil {
+		return nil // Proxy not enabled
+	}
+
+	return m.proxyManager.Health()
+}
+
+// GetBlockedRequests returns recently blocked requests
+func (m *Manager) GetBlockedRequests(limit int) ([]BlockedRequest, error) {
+	if m.proxyManager == nil {
+		return []BlockedRequest{}, nil
+	}
+
+	return m.proxyManager.GetBlockedRequests(limit)
+}
+
+// Shutdown gracefully shuts down the network manager
+func (m *Manager) Shutdown() error {
+	// Stop proxy if running
+	if m.proxyManager != nil {
+		if err := m.proxyManager.Stop(); err != nil {
+			return fmt.Errorf("failed to stop proxy: %w", err)
+		}
+	}
+
+	return nil
 }
