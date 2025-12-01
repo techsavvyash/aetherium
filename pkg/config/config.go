@@ -14,6 +14,7 @@ type Config struct {
 	Redis    RedisConfig    `yaml:"redis"`
 	Queue    QueueConfig    `yaml:"queue"`
 	VMM      VMMConfig      `yaml:"vmm"`
+	Network  NetworkConfig  `yaml:"network"`
 	Logging  LoggingConfig  `yaml:"logging"`
 }
 
@@ -85,6 +86,38 @@ type LokiConfig struct {
 	BatchSize     int               `yaml:"batch_size"`
 	BatchInterval string            `yaml:"batch_interval"` // e.g., "5s"
 	Labels        map[string]string `yaml:"labels"`
+}
+
+// NetworkConfig holds network configuration
+type NetworkConfig struct {
+	BridgeName string      `yaml:"bridge_name"`
+	BridgeIP   string      `yaml:"bridge_ip"`
+	SubnetCIDR string      `yaml:"subnet_cidr"`
+	TAPPrefix  string      `yaml:"tap_prefix"`
+	EnableNAT  bool        `yaml:"enable_nat"`
+	Proxy      ProxyConfig `yaml:"proxy"`
+}
+
+// ProxyConfig holds proxy configuration
+type ProxyConfig struct {
+	Enabled        bool        `yaml:"enabled"`
+	Provider       string      `yaml:"provider"`        // "squid" or "none"
+	Transparent    bool        `yaml:"transparent"`
+	Port           int         `yaml:"port"`
+	WhitelistMode  string      `yaml:"whitelist_mode"`  // "enforce", "monitor", "disabled"
+	DefaultDomains []string    `yaml:"default_domains"`
+	Squid          SquidConfig `yaml:"squid"`
+	RedirectHTTP   bool        `yaml:"redirect_http"`
+	RedirectHTTPS  bool        `yaml:"redirect_https"`
+}
+
+// SquidConfig holds Squid-specific configuration
+type SquidConfig struct {
+	ConfigPath  string `yaml:"config_path"`
+	CacheDir    string `yaml:"cache_dir"`
+	CacheSizeMB int    `yaml:"cache_size_mb"`
+	AccessLog   string `yaml:"access_log"`
+	CacheLog    string `yaml:"cache_log"`
 }
 
 // Load loads configuration from a YAML file
@@ -180,5 +213,71 @@ func (c *Config) setDefaults() {
 	}
 	if c.Logging.Output == "" {
 		c.Logging.Output = "stdout"
+	}
+
+	// Network defaults
+	if c.Network.BridgeName == "" {
+		c.Network.BridgeName = "aetherium0"
+	}
+	if c.Network.BridgeIP == "" {
+		c.Network.BridgeIP = "172.16.0.1/24"
+	}
+	if c.Network.SubnetCIDR == "" {
+		c.Network.SubnetCIDR = "172.16.0.0/24"
+	}
+	if c.Network.TAPPrefix == "" {
+		c.Network.TAPPrefix = "aether-"
+	}
+	// EnableNAT defaults to false if not specified (zero value)
+
+	// Proxy defaults
+	if c.Network.Proxy.Provider == "" {
+		c.Network.Proxy.Provider = "squid"
+	}
+	if c.Network.Proxy.Port == 0 {
+		c.Network.Proxy.Port = 3128
+	}
+	if c.Network.Proxy.WhitelistMode == "" {
+		c.Network.Proxy.WhitelistMode = "enforce"
+	}
+	if len(c.Network.Proxy.DefaultDomains) == 0 {
+		c.Network.Proxy.DefaultDomains = []string{
+			// Package managers
+			"registry.npmjs.org",
+			"pypi.org",
+			"files.pythonhosted.org",
+			"rubygems.org",
+			"repo.maven.apache.org",
+			"proxy.golang.org",
+			"crates.io",
+			// Version control
+			"github.com",
+			"githubusercontent.com",
+			"gitlab.com",
+			"bitbucket.org",
+			// Tool installers
+			"nodejs.org",
+			"python.org",
+			"go.dev",
+			"rust-lang.org",
+			"mise.jdx.dev",
+		}
+	}
+
+	// Squid defaults
+	if c.Network.Proxy.Squid.ConfigPath == "" {
+		c.Network.Proxy.Squid.ConfigPath = "/etc/squid/aetherium.conf"
+	}
+	if c.Network.Proxy.Squid.CacheDir == "" {
+		c.Network.Proxy.Squid.CacheDir = "/var/spool/squid-aetherium"
+	}
+	if c.Network.Proxy.Squid.CacheSizeMB == 0 {
+		c.Network.Proxy.Squid.CacheSizeMB = 1024
+	}
+	if c.Network.Proxy.Squid.AccessLog == "" {
+		c.Network.Proxy.Squid.AccessLog = "/var/log/squid/aetherium-access.log"
+	}
+	if c.Network.Proxy.Squid.CacheLog == "" {
+		c.Network.Proxy.Squid.CacheLog = "/var/log/squid/aetherium-cache.log"
 	}
 }

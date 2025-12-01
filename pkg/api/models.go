@@ -159,3 +159,40 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
 }
+
+// Proxy-related models
+
+// UpdateWhitelistRequest represents a request to update global whitelist
+type UpdateWhitelistRequest struct {
+	Domains []string `json:"domains" binding:"required"`
+}
+
+// UpdateVMWhitelistRequest represents a request to update VM-specific whitelist
+type UpdateVMWhitelistRequest struct {
+	Domains []string `json:"domains" binding:"required"`
+}
+
+// ProxyStatsResponse represents proxy statistics
+type ProxyStatsResponse struct {
+	TotalRequests   int64   `json:"total_requests"`
+	BlockedRequests int64   `json:"blocked_requests"`
+	CacheHitRate    float64 `json:"cache_hit_rate"`
+	BytesServed     int64   `json:"bytes_served"`
+	UptimeSeconds   int64   `json:"uptime_seconds"`
+}
+
+// BlockedRequestResponse represents a blocked HTTP request
+type BlockedRequestResponse struct {
+	Timestamp string `json:"timestamp"`
+	ClientIP  string `json:"client_ip"`
+	Method    string `json:"method"`
+	URL       string `json:"url"`
+	Domain    string `json:"domain"`
+	Reason    string `json:"reason"`
+}
+
+// BlockedRequestsResponse represents a list of blocked requests
+type BlockedRequestsResponse struct {
+	Requests []*BlockedRequestResponse `json:"requests"`
+	Total    int                       `json:"total"`
+}
