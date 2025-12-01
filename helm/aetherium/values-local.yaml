@@ -55,6 +55,44 @@ worker:
       memory: "2Gi"
       cpu: "2000m"
 
+  # Required for Firecracker: host networking for TAP/bridge
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+
+  # Required for Firecracker: privileged access to KVM and network
+  securityContext:
+    privileged: true
+
+  # Required volume mounts for Firecracker
+  volumes:
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm
+        type: CharDevice
+    - name: dev-vhost-vsock
+      hostPath:
+        path: /dev/vhost-vsock
+        type: CharDevice
+    - name: firecracker-assets
+      hostPath:
+        path: /var/firecracker
+        type: Directory
+    - name: run-aetherium
+      hostPath:
+        path: /run/aetherium
+        type: DirectoryOrCreate
+
+  volumeMounts:
+    - name: dev-kvm
+      mountPath: /dev/kvm
+    - name: dev-vhost-vsock
+      mountPath: /dev/vhost-vsock
+    - name: firecracker-assets
+      mountPath: /var/firecracker
+      readOnly: true
+    - name: run-aetherium
+      mountPath: /run/aetherium
+
 # Disable node provisioner (Firecracker already installed locally)
 nodeProvisioner:
   enabled: false
