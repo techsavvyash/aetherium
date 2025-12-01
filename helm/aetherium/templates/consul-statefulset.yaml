@@ -1,0 +1,146 @@
+{{- if .Values.consul.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aetherium.fullname" . }}-consul
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consul
+spec:
+  serviceName: consul
+  replicas: {{ .Values.consul.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "aetherium.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: consul
+  template:
+    metadata:
+      labels:
+        {{- include "aetherium.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: consul
+    spec:
+      {{- include "aetherium.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "aetherium.serviceAccountName" . }}
+      containers:
+        - name: consul
+          image: "{{ .Values.consul.image.repository }}:{{ .Values.consul.image.tag }}"
+          imagePullPolicy: {{ .Values.consul.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: 8500
+              protocol: TCP
+            - name: dns-tcp
+              containerPort: 8600
+              protocol: TCP
+            - name: dns-udp
+              containerPort: 8600
+              protocol: UDP
+            - name: serf-lan
+              containerPort: 8301
+              protocol: TCP
+            - name: serf-wan
+              containerPort: 8302
+              protocol: TCP
+            - name: server
+              containerPort: 8300
+              protocol: TCP
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: CONSUL_BIND_INTERFACE
+              value: eth0
+          args:
+            - agent
+            - -server
+            - -bootstrap-expect=1
+            - -ui
+            - -client=0.0.0.0
+            - -bind=$(POD_IP)
+            - -data-dir=/consul/data
+            - -datacenter={{ .Values.consul.datacenter | default "dc1" }}
+          volumeMounts:
+            - name: consul-data
+              mountPath: /consul/data
+          livenessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.consul.resources | nindent 12 }}
+      {{- with .Values.consul.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.consul.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: consul-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.consul.persistence.size | default "1Gi" }}
+  {{- else }}
+      volumes:
+        - name: consul-data
+          emptyDir: {}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetherium.fullname" . }}-consul
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consul
+spec:
+  type: {{ .Values.consul.service.type | default "ClusterIP" }}
+  ports:
+    - name: http
+      port: 8500
+      targetPort: http
+    - name: dns-tcp
+      port: 8600
+      targetPort: dns-tcp
+      protocol: TCP
+    - name: dns-udp
+      port: 8600
+      targetPort: dns-udp
+      protocol: UDP
+  selector:
+    {{- include "aetherium.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: consul
+---
+# Headless service for DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetherium.fullname" . }}-consul-headless
+  labels:
+    {{- include "aetherium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consul
+spec:
+  clusterIP: None
+  ports:
+    - name: http
+      port: 8500
+    - name: serf-lan
+      port: 8301
+    - name: serf-wan
+      port: 8302
+    - name: server
+      port: 8300
+  selector:
+    {{- include "aetherium.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: consul
+{{- end }}

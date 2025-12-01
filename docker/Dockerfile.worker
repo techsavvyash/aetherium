@@ -1,92 +1,72 @@
-# Dockerfile for Aetherium Worker
-# Multi-stage build with Firecracker dependencies
+# Dockerfile for Aetherium Worker (Bare-Metal K8s)
+#
+# This container is a thin wrapper around the worker binary.
+# Firecracker runs DIRECTLY on the host via mounted devices.
+#
+# Requirements on host node:
+#   - /dev/kvm (KVM virtualization)
+#   - /dev/vhost-vsock (VM communication)
+#   - /var/firecracker/ (kernel + rootfs)
+#   - Firecracker binary installed
+#
+# The container provides:
+#   - Managed deployment via K8s DaemonSet
+#   - Service registration with Consul
+#   - Health monitoring
+#   - Log aggregation
 
 # =============================================================================
-# Stage 1: Build
+# Stage 1: Build Worker Binary
 # =============================================================================
 FROM golang:1.23-alpine AS builder
 
-# Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Set working directory
 WORKDIR /build
 
-# Copy go mod files first for better caching
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
 COPY . .
 
-# Build the worker binary
+# Build worker with Consul support
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
     -o /build/bin/worker \
     ./cmd/worker
 
-# Build the FC agent binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s" \
-    -o /build/bin/fc-agent \
-    ./cmd/fc-agent
-
 # =============================================================================
-# Stage 2: Firecracker Download
-# =============================================================================
-FROM alpine:3.19 AS firecracker
-
-# Install download tools
-RUN apk add --no-cache curl tar
-
-# Download Firecracker v1.7.0
-ARG FIRECRACKER_VERSION=v1.7.0
-RUN curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" | \
-    tar -xz -C /tmp && \
-    mv "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/firecracker && \
-    chmod +x /usr/local/bin/firecracker
-
-# =============================================================================
-# Stage 3: Runtime
+# Stage 2: Minimal Runtime
 # =============================================================================
 FROM alpine:3.19
 
-# Install runtime dependencies
+# Minimal dependencies - network tools for TAP/bridge management
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     curl \
+    jq \
     iproute2 \
     iptables \
-    bridge-utils \
-    util-linux
+    bridge-utils
 
-# Create directories for Firecracker
-RUN mkdir -p /var/firecracker /tmp/aetherium-sockets /var/log/aetherium
+# Create required directories
+RUN mkdir -p /etc/aetherium /var/log/aetherium
 
-# Copy binaries
+# Copy worker binary only (Firecracker is on the host)
 COPY --from=builder /build/bin/worker /usr/local/bin/worker
-COPY --from=builder /build/bin/fc-agent /usr/local/bin/fc-agent
-COPY --from=firecracker /usr/local/bin/firecracker /usr/local/bin/firecracker
 
-# Copy default config
-COPY config/config.yaml /etc/aetherium/config.yaml
+# Copy entrypoint script
+COPY docker/scripts/worker-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Copy setup scripts
-COPY scripts/setup-network.sh /usr/local/bin/setup-network.sh
-RUN chmod +x /usr/local/bin/setup-network.sh
-
-# Environment variables
+# Environment
 ENV CONFIG_PATH=/etc/aetherium/config.yaml
+ENV CONSUL_ADDR=consul:8500
 
-# Note: Worker runs as root because it needs:
-# - Access to /dev/kvm for Firecracker
-# - Access to /dev/vhost-vsock for vsock communication
-# - Network configuration privileges (TAP devices, bridges)
+# Health check via worker's health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8081/health || exit 1
 
-# Health check - verify worker process is running
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD pgrep worker || exit 1
-
-# Entry point with network setup
-ENTRYPOINT ["/usr/local/bin/worker"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/usr/local/bin/worker"]
