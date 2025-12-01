@@ -138,6 +138,30 @@ consul:
     addr: ""
 
 # =============================================================================
+# Node Provisioner (Auto-scaling Support)
+# =============================================================================
+# Automatically provisions bare-metal nodes for Aetherium workers:
+# - Detects KVM capability on nodes
+# - Installs Firecracker binary
+# - Downloads kernel and rootfs
+# - Labels nodes as kvm-enabled
+# - Loads required kernel modules
+#
+# Enable this for auto-scaling scenarios where new nodes need automatic setup.
+nodeProvisioner:
+  enabled: true
+  image: alpine:3.19
+  # Firecracker version to install
+  firecrackerVersion: "v1.7.0"
+  # Kernel URL (with vsock support)
+  kernelUrl: "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+  # Rootfs URL (optional - if not set, must be prepared manually or via cloud-init)
+  # For production, host your own rootfs image:
+  rootfsUrl: ""
+  # Alternative: Use pre-built rootfs from S3/GCS/Azure Blob
+  # rootfsUrl: "https://your-bucket.s3.amazonaws.com/aetherium/rootfs.ext4"
+
+# =============================================================================
 # PostgreSQL Configuration
 # =============================================================================
 postgresql:

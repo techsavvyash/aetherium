@@ -1,0 +1,123 @@
+#cloud-config
+# =============================================================================
+# Aetherium Worker Node Cloud-Init Configuration
+# =============================================================================
+# Use this as user-data when launching worker nodes in cloud environments.
+# This script prepares the node for Firecracker VM workloads.
+#
+# Usage:
+#   AWS: Pass as user-data when launching EC2 instances
+#   Azure: Pass as custom-data when creating VMs
+#   GCP: Pass as startup-script metadata
+# =============================================================================
+
+# Package installation
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - tar
+  - iptables
+  - bridge-utils
+  - iproute2
+
+# Write configuration files
+write_files:
+  # Firecracker setup script
+  - path: /opt/aetherium/setup-firecracker.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.7.0}"
+      KERNEL_URL="${KERNEL_URL:-https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin}"
+      ROOTFS_URL="${ROOTFS_URL:-}"
+
+      echo "=== Setting up Aetherium Worker Node ==="
+
+      # Create directories
+      mkdir -p /var/firecracker
+      mkdir -p /run/aetherium
+      mkdir -p /var/log/aetherium
+
+      # Load kernel modules
+      modprobe kvm
+      modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
+      modprobe vhost_vsock
+
+      # Make modules persistent
+      echo "kvm" >> /etc/modules-load.d/aetherium.conf
+      echo "vhost_vsock" >> /etc/modules-load.d/aetherium.conf
+
+      # Install Firecracker
+      if [ ! -x /usr/local/bin/firecracker ]; then
+        echo "Installing Firecracker ${FIRECRACKER_VERSION}..."
+        curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \
+          | tar -xz -C /tmp
+        cp "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/firecracker
+        chmod +x /usr/local/bin/firecracker
+        rm -rf /tmp/release-*
+      fi
+
+      # Download kernel
+      if [ ! -f /var/firecracker/vmlinux ]; then
+        echo "Downloading kernel..."
+        curl -fsSL -o /var/firecracker/vmlinux "$KERNEL_URL"
+      fi
+
+      # Download rootfs if URL provided
+      if [ -n "$ROOTFS_URL" ] && [ ! -f /var/firecracker/rootfs.ext4 ]; then
+        echo "Downloading rootfs..."
+        curl -fsSL -o /var/firecracker/rootfs.ext4 "$ROOTFS_URL"
+      fi
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-aetherium.conf
+      sysctl -p /etc/sysctl.d/99-aetherium.conf
+
+      echo "=== Setup Complete ==="
+
+  # Systemd service for module loading
+  - path: /etc/systemd/system/aetherium-modules.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Load Aetherium kernel modules
+      After=systemd-modules-load.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/sbin/modprobe kvm
+      ExecStart=/sbin/modprobe vhost_vsock
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+# Run commands
+runcmd:
+  # Create aetherium directory
+  - mkdir -p /opt/aetherium
+
+  # Run setup script
+  - /opt/aetherium/setup-firecracker.sh
+
+  # Enable module loading service
+  - systemctl enable aetherium-modules.service
+  - systemctl start aetherium-modules.service
+
+  # Verify KVM
+  - |
+    if [ -e /dev/kvm ]; then
+      echo "KVM is available - this node can run Aetherium workers"
+    else
+      echo "WARNING: KVM not available - check BIOS virtualization settings"
+    fi
+
+# Final message
+final_message: |
+  Aetherium worker node setup complete!
+  KVM: $(test -e /dev/kvm && echo "Available" || echo "NOT AVAILABLE")
+  Firecracker: $(test -x /usr/local/bin/firecracker && echo "Installed" || echo "NOT INSTALLED")
+  Kernel: $(test -f /var/firecracker/vmlinux && echo "Present" || echo "MISSING")
