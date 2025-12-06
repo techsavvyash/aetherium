@@ -1,0 +1,163 @@
+# =============================================================================
+# Aetherium Local Development Values
+# =============================================================================
+# Use this for local testing on a Linux machine with KVM/Firecracker.
+#
+# Prerequisites:
+#   - KVM enabled (/dev/kvm accessible)
+#   - Firecracker installed
+#   - Kernel at /var/firecracker/vmlinux
+#   - Rootfs at /var/firecracker/rootfs.ext4
+#
+# Usage:
+#   helm install aetherium ./helm/aetherium -f ./helm/aetherium/values-local.yaml
+# =============================================================================
+
+global:
+  environment: development
+  imageRegistry: ""  # Use local images
+  imagePullPolicy: IfNotPresent
+
+# API Gateway - minimal resources
+apiGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: aetherium/api-gateway
+    tag: dev
+  service:
+    type: NodePort
+    port: 8080
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+
+# Worker - Firecracker mode with KVM
+worker:
+  enabled: true
+  kind: Deployment  # Use Deployment for local (single node)
+  replicaCount: 1
+  image:
+    repository: aetherium/worker
+    tag: dev
+  # For local testing, we assume the node has KVM
+  nodeSelector: {}
+  tolerations: []
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+  # Required for Firecracker: host networking for TAP/bridge
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+
+  # Required for Firecracker: privileged access to KVM and network
+  securityContext:
+    privileged: true
+
+  # Required volume mounts for Firecracker
+  volumes:
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm
+        type: CharDevice
+    - name: dev-vhost-vsock
+      hostPath:
+        path: /dev/vhost-vsock
+        type: CharDevice
+    - name: firecracker-assets
+      hostPath:
+        path: /var/firecracker
+        type: Directory
+    - name: run-aetherium
+      hostPath:
+        path: /run/aetherium
+        type: DirectoryOrCreate
+
+  volumeMounts:
+    - name: dev-kvm
+      mountPath: /dev/kvm
+    - name: dev-vhost-vsock
+      mountPath: /dev/vhost-vsock
+    - name: firecracker-assets
+      mountPath: /var/firecracker
+      readOnly: true
+    - name: run-aetherium
+      mountPath: /run/aetherium
+
+# Disable node provisioner (Firecracker already installed locally)
+nodeProvisioner:
+  enabled: false
+
+# Consul - single instance
+consul:
+  enabled: true
+  replicas: 1
+  persistence:
+    enabled: false  # Use emptyDir for local
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+
+# PostgreSQL - minimal
+postgresql:
+  enabled: true
+  auth:
+    username: aetherium
+    password: aetherium
+    database: aetherium
+  primary:
+    persistence:
+      enabled: false  # Use emptyDir for local
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+
+# Redis - minimal
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false  # Use emptyDir for local
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+
+# Application config - Firecracker VMM
+config:
+  vmm:
+    provider: firecracker
+    firecracker:
+      kernelPath: /var/firecracker/vmlinux
+      rootfsTemplate: /var/firecracker/rootfs.ext4
+      socketDir: /run/aetherium
+      defaultVcpu: 1
+      defaultMemoryMb: 256
+
+  queue:
+    provider: asynq
+    concurrency: 5
+
+  logging:
+    provider: stdout
+    level: debug
+
+  tools:
+    default:
+      - git
+      - nodejs@20
+    installTimeout: 10m

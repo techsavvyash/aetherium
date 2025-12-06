@@ -1,0 +1,46 @@
+# Dockerfile for Aetherium CLI
+# Minimal image for CLI tool
+
+# =============================================================================
+# Stage 1: Build
+# =============================================================================
+FROM golang:1.23-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the CLI binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
+    -o /build/bin/aether-cli \
+    ./cmd/aether-cli
+
+# =============================================================================
+# Stage 2: Runtime
+# =============================================================================
+FROM alpine:3.19
+
+# Install minimal dependencies
+RUN apk add --no-cache ca-certificates
+
+# Create non-root user
+RUN addgroup -g 1000 aetherium && \
+    adduser -u 1000 -G aetherium -s /bin/sh -D aetherium
+
+# Copy binary
+COPY --from=builder /build/bin/aether-cli /usr/local/bin/aether-cli
+
+# Switch to non-root user
+USER aetherium
+
+ENTRYPOINT ["/usr/local/bin/aether-cli"]

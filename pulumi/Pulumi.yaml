@@ -1,0 +1,20 @@
+name: aetherium-infra
+runtime: nodejs
+description: Pulumi infrastructure for Aetherium distributed task execution platform
+
+config:
+  # Kubernetes cluster configuration
+  kubernetes:clusterName:
+    default: aetherium-cluster
+  kubernetes:nodeCount:
+    default: 3
+  kubernetes:nodeSize:
+    default: Standard_D4s_v3
+
+  # Cloud provider (aws, azure, gcp, or local)
+  cloud:provider:
+    default: local
+
+  # Environment
+  environment:
+    default: development

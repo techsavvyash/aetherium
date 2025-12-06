@@ -1,0 +1,6 @@
+config:
+  aetherium-infra:environment: production
+  kubernetes:clusterName: aetherium-prod
+  kubernetes:nodeCount: "5"
+  kubernetes:nodeSize: Standard_D8s_v3
+  cloud:provider: azure

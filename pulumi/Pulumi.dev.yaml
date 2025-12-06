@@ -1,0 +1,5 @@
+config:
+  aetherium-infra:environment: development
+  kubernetes:clusterName: aetherium-dev
+  kubernetes:nodeCount: "1"
+  cloud:provider: local
