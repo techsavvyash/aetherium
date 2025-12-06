@@ -1,0 +1,72 @@
+# Dockerfile for Aetherium Worker (Bare-Metal K8s)
+#
+# This container is a thin wrapper around the worker binary.
+# Firecracker runs DIRECTLY on the host via mounted devices.
+#
+# Requirements on host node:
+#   - /dev/kvm (KVM virtualization)
+#   - /dev/vhost-vsock (VM communication)
+#   - /var/firecracker/ (kernel + rootfs)
+#   - Firecracker binary installed
+#
+# The container provides:
+#   - Managed deployment via K8s DaemonSet
+#   - Service registration with Consul
+#   - Health monitoring
+#   - Log aggregation
+
+# =============================================================================
+# Stage 1: Build Worker Binary
+# =============================================================================
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Build worker with Consul support
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
+    -o /build/bin/worker \
+    ./cmd/worker
+
+# =============================================================================
+# Stage 2: Minimal Runtime
+# =============================================================================
+FROM alpine:3.19
+
+# Minimal dependencies - network tools for TAP/bridge management
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    jq \
+    iproute2 \
+    iptables \
+    bridge-utils
+
+# Create required directories
+RUN mkdir -p /etc/aetherium /var/log/aetherium
+
+# Copy worker binary only (Firecracker is on the host)
+COPY --from=builder /build/bin/worker /usr/local/bin/worker
+
+# Copy entrypoint script
+COPY docker/scripts/worker-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Environment
+ENV CONFIG_PATH=/etc/aetherium/config.yaml
+ENV CONSUL_ADDR=consul:8500
+
+# Health check via worker's health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8081/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/usr/local/bin/worker"]
