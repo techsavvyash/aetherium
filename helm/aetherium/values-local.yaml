@@ -35,6 +35,18 @@ apiGateway:
     limits:
       memory: "256Mi"
       cpu: "250m"
+  livenessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
 
 # Worker - Firecracker mode with KVM
 worker:
@@ -81,6 +93,10 @@ worker:
       hostPath:
         path: /run/aetherium
         type: DirectoryOrCreate
+    - name: firecracker-bin
+      hostPath:
+        path: /usr/local/bin/firecracker
+        type: File
 
   volumeMounts:
     - name: dev-kvm
@@ -89,9 +105,11 @@ worker:
       mountPath: /dev/vhost-vsock
     - name: firecracker-assets
       mountPath: /var/firecracker
-      readOnly: true
     - name: run-aetherium
       mountPath: /run/aetherium
+    - name: firecracker-bin
+      mountPath: /usr/local/bin/firecracker
+      readOnly: true
 
 # Disable node provisioner (Firecracker already installed locally)
 nodeProvisioner:
@@ -111,6 +129,10 @@ consul:
 # PostgreSQL - minimal
 postgresql:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnami/postgresql
+    tag: latest  # Use latest tag
   auth:
     username: aetherium
     password: aetherium
@@ -126,6 +148,10 @@ postgresql:
 # Redis - minimal
 redis:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnami/redis
+    tag: latest  # Use latest tag
   architecture: standalone
   auth:
     enabled: false
