@@ -35,6 +35,12 @@ spec:
           env:
             - name: CONFIG_PATH
               value: /etc/aetherium/config.yaml
+            - name: POSTGRES_HOST
+              value: {{ include "aetherium.postgresql.host" . | quote }}
+            - name: POSTGRES_PORT
+              value: {{ include "aetherium.postgresql.port" . | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ .Values.postgresql.auth.database | default "aetherium" | quote }}
             {{- if not .Values.postgresql.enabled }}
             - name: POSTGRES_USER
               valueFrom:
@@ -55,6 +61,8 @@ spec:
                   name: {{ .Release.Name }}-postgresql
                   key: password
             {{- end }}
+            - name: REDIS_ADDR
+              value: "{{ include "aetherium.redis.host" . }}:{{ include "aetherium.redis.port" . }}"
             {{- with .Values.apiGateway.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
