@@ -63,11 +63,11 @@ worker:
   tolerations: []
   resources:
     requests:
-      memory: "256Mi"
+      memory: "512Mi"
       cpu: "100m"
     limits:
-      memory: "2Gi"
-      cpu: "2000m"
+      memory: "8Gi"
+      cpu: "4000m"
 
   # Required for Firecracker: host networking for TAP/bridge
   hostNetwork: true

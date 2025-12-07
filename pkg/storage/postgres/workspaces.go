@@ -492,7 +492,9 @@ func (r *prepStepRepository) Create(ctx context.Context, step *storage.PrepStep)
 			$1, $2, $3, $4, $5, $6, $7
 		)`
 
-	var configJSON, metadataJSON []byte
+	// Explicitly marshal JSONB fields to []byte for PostgreSQL
+	configJSON := []byte("{}")
+	metadataJSON := []byte("{}")
 	var err error
 
 	if step.Config != nil {
