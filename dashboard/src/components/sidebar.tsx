@@ -11,10 +11,14 @@ import {
   Terminal,
   TerminalSquare,
   Settings,
+  Sparkles,
+  Layers,
 } from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Environments", href: "/environments", icon: Layers },
+  { name: "Workspaces", href: "/workspaces", icon: Sparkles },
   { name: "Virtual Machines", href: "/vms", icon: Server },
   { name: "Console", href: "/console", icon: TerminalSquare },
   { name: "Workers", href: "/workers", icon: Cpu },

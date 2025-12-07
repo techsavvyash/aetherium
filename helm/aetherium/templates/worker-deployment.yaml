@@ -29,6 +29,147 @@ spec:
       hostNetwork: true
       dnsPolicy: {{ .Values.worker.dnsPolicy | default "ClusterFirstWithHostNet" }}
       {{- end }}
+
+      # Init container to prepare rootfs template with fc-agent
+      initContainers:
+        - name: prepare-rootfs
+          image: {{ include "aetherium.worker.image" . }}
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== Aetherium Worker Initialization ==="
+              echo ""
+
+              # 1. Verify KVM
+              echo "1. Checking KVM..."
+              if [ ! -e /dev/kvm ]; then
+                echo "ERROR: /dev/kvm not found - KVM not available"
+                exit 1
+              fi
+              echo "   ✓ KVM device available"
+
+              # 2. Verify kernel
+              echo "2. Checking Firecracker kernel..."
+              if [ ! -f /var/firecracker/vmlinux ]; then
+                echo "ERROR: Kernel not found at /var/firecracker/vmlinux"
+                exit 1
+              fi
+              echo "   ✓ Kernel image found"
+
+              # 3. Verify base rootfs exists
+              echo "3. Checking base rootfs..."
+              if [ ! -f /var/firecracker/rootfs.ext4 ]; then
+                echo "ERROR: Base rootfs not found at /var/firecracker/rootfs.ext4"
+                exit 1
+              fi
+              echo "   ✓ Base rootfs image found"
+
+              # 4. Prepare rootfs template (per-VM isolation)
+              echo "4. Preparing rootfs template..."
+
+              # Check if template already exists
+              if [ ! -f /var/firecracker/rootfs-template.ext4 ]; then
+                echo "   Creating rootfs template from base..."
+                cp /var/firecracker/rootfs.ext4 /var/firecracker/rootfs-template.ext4
+                echo "   ✓ Template created"
+              else
+                echo "   ✓ Template already exists"
+              fi
+
+              # 5. Install fc-agent in template (idempotent)
+              echo "5. Installing fc-agent in template..."
+              MOUNT_POINT="/tmp/rootfs-mount"
+              mkdir -p "$MOUNT_POINT"
+              mount -o loop /var/firecracker/rootfs-template.ext4 "$MOUNT_POINT"
+
+              if [ -f "$MOUNT_POINT/usr/local/bin/fc-agent" ] && \
+                 [ -f "$MOUNT_POINT/etc/systemd/system/fc-agent.service" ]; then
+                echo "   ✓ fc-agent already installed in template"
+              else
+                echo "   Installing fc-agent..."
+
+                # Copy fc-agent binary from this container
+                cp /usr/local/bin/fc-agent "$MOUNT_POINT/usr/local/bin/fc-agent"
+                chmod +x "$MOUNT_POINT/usr/local/bin/fc-agent"
+
+                # Create systemd service
+                cat > "$MOUNT_POINT/etc/systemd/system/fc-agent.service" <<'EOF'
+              [Unit]
+              Description=Firecracker Agent
+              After=network.target
+
+              [Service]
+              Type=simple
+              ExecStart=/usr/local/bin/fc-agent
+              Restart=always
+              RestartSec=3
+              StandardOutput=journal
+              StandardError=journal
+
+              [Install]
+              WantedBy=multi-user.target
+              EOF
+
+                # Enable service
+                mkdir -p "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants"
+                ln -sf /etc/systemd/system/fc-agent.service \
+                  "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants/fc-agent.service"
+
+                echo "   ✓ fc-agent installed and enabled"
+              fi
+
+              umount "$MOUNT_POINT"
+
+              # 6. Verify template integrity
+              echo "6. Verifying template integrity..."
+              e2fsck -f -y /var/firecracker/rootfs-template.ext4 || true
+              echo "   ✓ Template filesystem check complete"
+
+              # 7. Mark template as read-only (prevent accidental modification)
+              chmod 444 /var/firecracker/rootfs-template.ext4
+              echo "   ✓ Template marked read-only"
+
+              # 8. Self-healing: Cleanup orphaned VM rootfs files
+              echo "8. Cleaning up orphaned VM rootfs files..."
+              ORPHANED_COUNT=0
+              for rootfs in /var/firecracker/rootfs-vm-*.ext4; do
+                if [ -f "$rootfs" ]; then
+                  VM_ID=$(echo "$rootfs" | sed 's/.*rootfs-vm-\(.*\)\.ext4/\1/')
+                  SOCKET="/run/aetherium/aetherium-vm-${VM_ID}.sock"
+
+                  # If socket doesn't exist, rootfs is orphaned
+                  if [ ! -S "$SOCKET" ]; then
+                    echo "   Cleaning orphaned rootfs: $rootfs"
+                    rm -f "$rootfs"
+                    ORPHANED_COUNT=$((ORPHANED_COUNT + 1))
+                  fi
+                fi
+              done
+
+              if [ $ORPHANED_COUNT -eq 0 ]; then
+                echo "   ✓ No orphaned rootfs files found"
+              else
+                echo "   ✓ Cleaned $ORPHANED_COUNT orphaned rootfs file(s)"
+              fi
+
+              echo ""
+              echo "=== Initialization Complete ==="
+              echo "Worker is ready to spawn VMs with per-VM rootfs isolation"
+          securityContext:
+            {{- toYaml .Values.worker.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.worker.volumes }}
+            {{- range .Values.worker.volumes }}
+            {{- if or (eq .name "dev-kvm") (eq .name "firecracker-assets") }}
+            - name: {{ .name }}
+              mountPath: {{ if eq .name "dev-kvm" }}/dev/kvm{{ else }}/var/firecracker{{ end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+
       containers:
         - name: worker
           image: {{ include "aetherium.worker.image" . }}

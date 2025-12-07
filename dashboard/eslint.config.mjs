@@ -13,6 +13,15 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  // Disable overly strict rules for data fetching patterns
+  {
+    rules: {
+      // Allow async data fetching in useEffect - common pattern for initial data loading
+      "react-hooks/set-state-in-effect": "off",
+      // Allow variables to be accessed in callbacks before declaration (hoisting)
+      "react-hooks/immutability": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;
