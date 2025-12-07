@@ -767,7 +767,14 @@ su - aether -c '
 	status := "completed"
 	if execResult.ExitCode != 0 {
 		status = "failed"
+		// Include stderr and stdout in error message for better debugging
 		errMsg := fmt.Sprintf("prompt execution failed with exit code %d", execResult.ExitCode)
+		if execResult.Stderr != "" {
+			errMsg += fmt.Sprintf("\nStderr: %s", execResult.Stderr)
+		}
+		if execResult.Stdout != "" {
+			errMsg += fmt.Sprintf("\nStdout: %s", execResult.Stdout)
+		}
 		result.Error = errMsg
 		log.Printf("✗ Prompt execution failed: %s", errMsg)
 	} else {

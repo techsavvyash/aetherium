@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { useWorkspaceStream } from "@/lib/websocket";
 import type { Workspace, PromptTask, Secret, PrepStep } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -142,6 +143,11 @@ export default function WorkspaceDetailPage() {
   const [newSecretType, setNewSecretType] = useState("api_key");
   const [addingSecret, setAddingSecret] = useState(false);
 
+  // WebSocket streaming state for real-time terminal output
+  const [streamOutput, setStreamOutput] = useState("");
+  const [streamExitCode, setStreamExitCode] = useState<number | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+
   const fetchWorkspace = useCallback(async () => {
     const result = await api.getWorkspace(workspaceId);
     if (result.error) {
@@ -196,25 +202,79 @@ export default function WorkspaceDetailPage() {
     }
   }, [workspace?.status, prompts, fetchPrompts]);
 
+  // WebSocket streaming hook
+  const {
+    output: wsOutput,
+    isConnected,
+    isStreaming: wsIsStreaming,
+    exitCode: wsExitCode,
+    error: wsError,
+    connect: wsConnect,
+    disconnect: wsDisconnect,
+    sendPrompt: wsSendPrompt,
+    clearOutput: wsClearOutput,
+  } = useWorkspaceStream({ workspaceId, autoConnect: false });
+
+  // Connect WebSocket when workspace is ready
+  useEffect(() => {
+    if (workspace?.status === "ready") {
+      wsConnect();
+    }
+    return () => {
+      wsDisconnect();
+    };
+  }, [workspace?.status, wsConnect, wsDisconnect]);
+
+  // Update streaming state from WebSocket
+  useEffect(() => {
+    if (wsOutput) {
+      // Append to stream output (wsOutput is cumulative in the hook)
+      setStreamOutput(wsOutput);
+      setIsStreaming(wsIsStreaming);
+    }
+    if (wsExitCode !== null) {
+      setStreamExitCode(wsExitCode);
+      setIsStreaming(false);
+      // Refresh prompts list after completion
+      fetchPrompts();
+    }
+    if (wsError) {
+      setError(wsError);
+    }
+  }, [wsOutput, wsIsStreaming, wsExitCode, wsError, fetchPrompts]);
+
   const handleSubmitPrompt = useCallback(async (
     prompt: string,
     systemPrompt?: string,
     workingDirectory?: string
   ) => {
-    const result = await api.submitPrompt(workspaceId, {
-      prompt,
-      system_prompt: systemPrompt,
-      working_directory: workingDirectory,
-    });
+    // Clear previous streaming output
+    setStreamOutput("");
+    setStreamExitCode(null);
+    setIsStreaming(true);
+    wsClearOutput();
 
-    if (result.error) {
-      setError(result.error);
-      throw new Error(result.error);
+    if (isConnected) {
+      // Use WebSocket for real-time streaming
+      // WebSocket handles execution and persists to database
+      wsSendPrompt(prompt, systemPrompt, workingDirectory);
     } else {
-      setError(null);
-      fetchPrompts();
+      // Fallback to REST API only
+      const result = await api.submitPrompt(workspaceId, {
+        prompt,
+        system_prompt: systemPrompt,
+        working_directory: workingDirectory,
+      });
+
+      if (result.error) {
+        setError(result.error);
+        throw new Error(result.error);
+      } else {
+        setError(null);
+        fetchPrompts();
+      }
     }
-  }, [workspaceId, fetchPrompts]);
+  }, [workspaceId, fetchPrompts, isConnected, wsSendPrompt, wsClearOutput]);
 
   const handleAddSecret = async () => {
     if (!newSecretName.trim() || !newSecretValue.trim()) return;
@@ -477,16 +537,70 @@ export default function WorkspaceDetailPage() {
               <CardTitle className="flex items-center gap-2">
                 <Terminal className="h-5 w-5" />
                 Terminal Output
+                {isConnected && (
+                  <Badge variant="outline" className="ml-2 text-green-500 border-green-500">
+                    <span className="w-2 h-2 bg-green-500 rounded-full mr-1 animate-pulse" />
+                    Live
+                  </Badge>
+                )}
               </CardTitle>
               <CardDescription>
-                {prompts.length > 0
+                {isStreaming
+                  ? "Streaming output in real-time..."
+                  : prompts.length > 0
                   ? `Showing output from the most recent prompt execution`
                   : `No prompts executed yet. Submit a prompt to see terminal output.`}
               </CardDescription>
             </CardHeader>
             <CardContent>
               {(() => {
-                // Find the most recent prompt with output (prefer running, then completed)
+                // Prefer streaming output when available
+                if (streamOutput || isStreaming) {
+                  return (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {isStreaming ? (
+                            <Badge className="bg-blue-500">
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              Streaming
+                            </Badge>
+                          ) : streamExitCode !== null ? (
+                            streamExitCode === 0 ? (
+                              <Badge className="bg-green-500">Completed</Badge>
+                            ) : (
+                              <Badge variant="destructive">Failed</Badge>
+                            )
+                          ) : (
+                            <Badge variant="secondary">Ready</Badge>
+                          )}
+                          {streamExitCode !== null && (
+                            <Badge
+                              variant={streamExitCode === 0 ? "outline" : "destructive"}
+                              className="font-mono"
+                            >
+                              Exit: {streamExitCode}
+                            </Badge>
+                          )}
+                        </div>
+                        {isConnected && (
+                          <span className="text-xs text-green-500">
+                            WebSocket connected
+                          </span>
+                        )}
+                      </div>
+
+                      <TerminalView
+                        output={streamOutput || (isStreaming ? "Waiting for output..." : "No output")}
+                        height="500px"
+                        title={`${aiInfo.name} Output (Live)`}
+                        readOnly={true}
+                      />
+                    </div>
+                  );
+                }
+
+                // Fall back to polled prompt output
                 const runningPrompt = prompts.find(
                   (p) => p.status.toLowerCase() === "running"
                 );
