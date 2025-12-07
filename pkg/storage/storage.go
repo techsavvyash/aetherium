@@ -134,6 +134,121 @@ type WorkerMetric struct {
 	Metadata map[string]interface{} `db:"metadata" json:"metadata"`
 }
 
+// Workspace represents an AI workspace that extends a VM
+type Workspace struct {
+	ID                uuid.UUID  `db:"id" json:"id"`
+	Name              string     `db:"name" json:"name"`
+	Description       *string    `db:"description" json:"description,omitempty"`
+	VMID              *uuid.UUID `db:"vm_id" json:"vm_id,omitempty"`
+	EnvironmentID     *uuid.UUID `db:"environment_id" json:"environment_id,omitempty"`
+	Status            string     `db:"status" json:"status"`
+	AIAssistant       string     `db:"ai_assistant" json:"ai_assistant"`
+	AIAssistantConfig JSONB      `db:"ai_assistant_config" json:"ai_assistant_config"`
+	WorkingDirectory  string     `db:"working_directory" json:"working_directory"`
+	IdleSince         *time.Time `db:"idle_since" json:"idle_since,omitempty"`
+	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+	ReadyAt           *time.Time `db:"ready_at" json:"ready_at,omitempty"`
+	StoppedAt         *time.Time `db:"stopped_at" json:"stopped_at,omitempty"`
+	Metadata          JSONB      `db:"metadata" json:"metadata"`
+}
+
+// WorkspaceSecret represents an encrypted secret for a workspace
+type WorkspaceSecret struct {
+	ID              uuid.UUID  `db:"id" json:"id"`
+	WorkspaceID     *uuid.UUID `db:"workspace_id" json:"workspace_id,omitempty"`
+	Name            string     `db:"name" json:"name"`
+	Description     *string    `db:"description" json:"description,omitempty"`
+	SecretType      string     `db:"secret_type" json:"secret_type"`
+	EncryptedValue  []byte     `db:"encrypted_value" json:"-"` // Never expose in JSON
+	EncryptionKeyID string     `db:"encryption_key_id" json:"-"`
+	Nonce           []byte     `db:"nonce" json:"-"`
+	Scope           string     `db:"scope" json:"scope"`
+	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// PrepStep represents a workspace preparation step
+type PrepStep struct {
+	ID          uuid.UUID  `db:"id" json:"id"`
+	WorkspaceID uuid.UUID  `db:"workspace_id" json:"workspace_id"`
+	StepType    string     `db:"step_type" json:"step_type"`
+	StepOrder   int        `db:"step_order" json:"step_order"`
+	Config      JSONB      `db:"config" json:"config"`
+	Status      string     `db:"status" json:"status"`
+	ExitCode    *int       `db:"exit_code" json:"exit_code,omitempty"`
+	Stdout      *string    `db:"stdout" json:"stdout,omitempty"`
+	Stderr      *string    `db:"stderr" json:"stderr,omitempty"`
+	Error       *string    `db:"error" json:"error,omitempty"`
+	StartedAt   *time.Time `db:"started_at" json:"started_at,omitempty"`
+	CompletedAt *time.Time `db:"completed_at" json:"completed_at,omitempty"`
+	DurationMS  *int       `db:"duration_ms" json:"duration_ms,omitempty"`
+	Metadata    JSONB      `db:"metadata" json:"metadata"`
+}
+
+// PrepStepResult holds execution results for a prep step
+type PrepStepResult struct {
+	ExitCode   int
+	Stdout     string
+	Stderr     string
+	Error      string
+	DurationMS int
+}
+
+// PromptTask represents a queued prompt for execution
+type PromptTask struct {
+	ID               uuid.UUID  `db:"id" json:"id"`
+	WorkspaceID      uuid.UUID  `db:"workspace_id" json:"workspace_id"`
+	Prompt           string     `db:"prompt" json:"prompt"`
+	SystemPrompt     *string    `db:"system_prompt" json:"system_prompt,omitempty"`
+	WorkingDirectory *string    `db:"working_directory" json:"working_directory,omitempty"`
+	Environment      JSONB      `db:"environment" json:"environment"`
+	Priority         int        `db:"priority" json:"priority"`
+	Status           string     `db:"status" json:"status"`
+	ExitCode         *int       `db:"exit_code" json:"exit_code,omitempty"`
+	Stdout           *string    `db:"stdout" json:"stdout,omitempty"`
+	Stderr           *string    `db:"stderr" json:"stderr,omitempty"`
+	Error            *string    `db:"error" json:"error,omitempty"`
+	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
+	ScheduledAt      time.Time  `db:"scheduled_at" json:"scheduled_at"`
+	StartedAt        *time.Time `db:"started_at" json:"started_at,omitempty"`
+	CompletedAt      *time.Time `db:"completed_at" json:"completed_at,omitempty"`
+	DurationMS       *int       `db:"duration_ms" json:"duration_ms,omitempty"`
+	Metadata         JSONB      `db:"metadata" json:"metadata"`
+}
+
+// PromptResult holds execution results for a prompt
+type PromptResult struct {
+	ExitCode   int
+	Stdout     string
+	Stderr     string
+	Error      string
+	DurationMS int
+}
+
+// WorkspaceSession represents a WebSocket session
+type WorkspaceSession struct {
+	ID             uuid.UUID  `db:"id" json:"id"`
+	WorkspaceID    uuid.UUID  `db:"workspace_id" json:"workspace_id"`
+	Status         string     `db:"status" json:"status"`
+	ClientIP       *string    `db:"client_ip" json:"client_ip,omitempty"`
+	UserAgent      *string    `db:"user_agent" json:"user_agent,omitempty"`
+	ConnectedAt    time.Time  `db:"connected_at" json:"connected_at"`
+	LastActivity   time.Time  `db:"last_activity" json:"last_activity"`
+	DisconnectedAt *time.Time `db:"disconnected_at" json:"disconnected_at,omitempty"`
+	Metadata       JSONB      `db:"metadata" json:"metadata"`
+}
+
+// SessionMessage represents a message in an interactive session
+type SessionMessage struct {
+	ID          uuid.UUID `db:"id" json:"id"`
+	SessionID   uuid.UUID `db:"session_id" json:"session_id"`
+	MessageType string    `db:"message_type" json:"message_type"`
+	Content     string    `db:"content" json:"content"`
+	ExitCode    *int      `db:"exit_code" json:"exit_code,omitempty"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	Metadata    JSONB     `db:"metadata" json:"metadata"`
+}
+
 // VMRepository handles VM storage operations
 type VMRepository interface {
 	Create(ctx context.Context, vm *VM) error
@@ -197,6 +312,72 @@ type WorkerMetricRepository interface {
 	DeleteOlderThan(ctx context.Context, before time.Time) error
 }
 
+// WorkspaceRepository handles workspace storage operations
+type WorkspaceRepository interface {
+	Create(ctx context.Context, workspace *Workspace) error
+	Get(ctx context.Context, id uuid.UUID) (*Workspace, error)
+	GetByName(ctx context.Context, name string) (*Workspace, error)
+	GetByVMID(ctx context.Context, vmID uuid.UUID) (*Workspace, error)
+	List(ctx context.Context, filters map[string]interface{}) ([]*Workspace, error)
+	ListByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]*Workspace, error)
+	ListIdleWithVMs(ctx context.Context) ([]*Workspace, error)
+	Update(ctx context.Context, workspace *Workspace) error
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
+	UpdateIdleSince(ctx context.Context, id uuid.UUID, idleSince *time.Time) error
+	SetVMID(ctx context.Context, id uuid.UUID, vmID uuid.UUID) error
+	ClearVMID(ctx context.Context, id uuid.UUID) error
+	SetEnvironmentID(ctx context.Context, id uuid.UUID, environmentID uuid.UUID) error
+	SetReady(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// SecretRepository handles workspace secret storage operations
+type SecretRepository interface {
+	Create(ctx context.Context, secret *WorkspaceSecret) error
+	Get(ctx context.Context, id uuid.UUID) (*WorkspaceSecret, error)
+	GetByName(ctx context.Context, workspaceID *uuid.UUID, name string) (*WorkspaceSecret, error)
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]*WorkspaceSecret, error)
+	ListGlobal(ctx context.Context) ([]*WorkspaceSecret, error)
+	Update(ctx context.Context, secret *WorkspaceSecret) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// PrepStepRepository handles workspace preparation step storage operations
+type PrepStepRepository interface {
+	Create(ctx context.Context, step *PrepStep) error
+	CreateBatch(ctx context.Context, steps []*PrepStep) error
+	Get(ctx context.Context, id uuid.UUID) (*PrepStep, error)
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]*PrepStep, error)
+	GetNextPending(ctx context.Context, workspaceID uuid.UUID) (*PrepStep, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, result *PrepStepResult) error
+}
+
+// PromptTaskRepository handles prompt task storage operations
+type PromptTaskRepository interface {
+	Create(ctx context.Context, task *PromptTask) error
+	Get(ctx context.Context, id uuid.UUID) (*PromptTask, error)
+	ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, limit int) ([]*PromptTask, error)
+	GetNextPending(ctx context.Context, workspaceID uuid.UUID) (*PromptTask, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, result *PromptResult) error
+	Cancel(ctx context.Context, id uuid.UUID) error
+}
+
+// SessionRepository handles workspace session storage operations
+type SessionRepository interface {
+	Create(ctx context.Context, session *WorkspaceSession) error
+	Get(ctx context.Context, id uuid.UUID) (*WorkspaceSession, error)
+	GetActiveByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]*WorkspaceSession, error)
+	UpdateLastActivity(ctx context.Context, id uuid.UUID) error
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// SessionMessageRepository handles session message storage operations
+type SessionMessageRepository interface {
+	Create(ctx context.Context, message *SessionMessage) error
+	ListBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*SessionMessage, error)
+}
+
 // Store provides access to all repositories
 type Store interface {
 	VMs() VMRepository
@@ -205,5 +386,12 @@ type Store interface {
 	Executions() ExecutionRepository
 	Workers() WorkerRepository
 	WorkerMetrics() WorkerMetricRepository
+	Environments() EnvironmentRepository
+	Workspaces() WorkspaceRepository
+	Secrets() SecretRepository
+	PrepSteps() PrepStepRepository
+	PromptTasks() PromptTaskRepository
+	Sessions() SessionRepository
+	SessionMessages() SessionMessageRepository
 	Close() error
 }

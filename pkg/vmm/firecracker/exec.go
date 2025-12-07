@@ -47,12 +47,32 @@ func (f *FirecrackerOrchestrator) ExecuteCommand(ctx context.Context, vmID strin
 	return f.executeCommand(ctx, handle, cmd)
 }
 
-// executeCommand tries vsock first, falls back to network if needed
+// executeCommand tries vsock first, falls back to TCP if needed
 func (f *FirecrackerOrchestrator) executeCommand(ctx context.Context, handle *vmHandle, cmd *vmm.Command) (*vmm.ExecResult, error) {
-	// Try vsock first with longer timeout to allow agent to start
-	conn, err := f.connectViaVsock(ctx, handle, 15*time.Second)
-	if err != nil {
-		// Vsock failed - check if it's a kernel support issue
+	// Try vsock first with shorter timeout
+	conn, vsockErr := f.connectViaVsock(ctx, handle, 5*time.Second)
+	if vsockErr != nil {
+		// Vsock failed - try TCP fallback
+		if handle.ipAddress != "" {
+			tcpConn, tcpErr := f.connectViaTCP(ctx, handle, 10*time.Second)
+			if tcpErr == nil {
+				defer tcpConn.Close()
+				return f.sendCommandAndWait(ctx, tcpConn, cmd)
+			}
+			// Both failed
+			return &vmm.ExecResult{
+				ExitCode: 1,
+				Stdout:   "",
+				Stderr: fmt.Sprintf(`Cannot connect to VM agent via vsock or TCP:
+- Vsock error: %v
+- TCP error (IP: %s): %v
+
+The VM is running but agent cannot be reached. Ensure fc-agent is running inside the VM.
+`, vsockErr, handle.ipAddress, tcpErr),
+			}, nil
+		}
+
+		// No IP address - vsock-only mode
 		return &vmm.ExecResult{
 			ExitCode: 1,
 			Stdout:   "",
@@ -78,12 +98,29 @@ Solutions:
    ./bin/docker-demo
 
 Current status: VM is running but agent cannot be reached via vsock.
-`, err),
+`, vsockErr),
 		}, nil
 	}
 	defer conn.Close()
 
 	return f.sendCommandAndWait(ctx, conn, cmd)
+}
+
+// connectViaTCP connects to the VM agent via TCP
+func (f *FirecrackerOrchestrator) connectViaTCP(ctx context.Context, handle *vmHandle, timeout time.Duration) (net.Conn, error) {
+	addr := fmt.Sprintf("%s:%d", handle.ipAddress, AgentPort)
+
+	// Use dialer with timeout
+	dialer := &net.Dialer{
+		Timeout: timeout,
+	}
+
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to TCP at %s: %w", addr, err)
+	}
+
+	return conn, nil
 }
 
 func (f *FirecrackerOrchestrator) connectViaVsock(ctx context.Context, handle *vmHandle, timeout time.Duration) (net.Conn, error) {

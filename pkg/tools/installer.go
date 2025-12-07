@@ -30,6 +30,7 @@ func (i *Installer) InstallTools(ctx context.Context, vmID string, tools []strin
 
 	log.Printf("Installing tools in VM %s: %v", vmID, tools)
 
+	var failedTools []string
 	for _, tool := range tools {
 		version := versions[tool]
 		if version == "" {
@@ -39,10 +40,17 @@ func (i *Installer) InstallTools(ctx context.Context, vmID string, tools []strin
 		log.Printf("Installing %s@%s...", tool, version)
 
 		if err := i.installTool(ctx, vmID, tool, version); err != nil {
-			return fmt.Errorf("failed to install %s: %w", tool, err)
+			log.Printf("✗ Failed to install %s@%s: %v", tool, version, err)
+			failedTools = append(failedTools, tool)
+			// Continue installing other tools instead of returning early
+			continue
 		}
 
 		log.Printf("✓ %s@%s installed successfully", tool, version)
+	}
+
+	if len(failedTools) > 0 {
+		return fmt.Errorf("failed to install tools: %v", failedTools)
 	}
 
 	return nil
@@ -119,6 +127,8 @@ func getInstallScript(tool string, version string) (string, error) {
 		return getBunInstallScript(version), nil
 	case "claude-code", "claudecode":
 		return getClaudeCodeInstallScript(version), nil
+	case "ampcode", "amp":
+		return getAmpcodeInstallScript(version), nil
 	case "go", "golang":
 		return getGoInstallScript(version), nil
 	case "python", "python3":
@@ -144,7 +154,9 @@ func getVerifyCommand(tool string) string {
 	case "bun":
 		return "which bun && bun --version"
 	case "claude-code", "claudecode":
-		return "which claude-code && claude-code --version"
+		return "which claude && claude --version"
+	case "ampcode", "amp":
+		return "which amp && amp --version"
 	case "go", "golang":
 		return "which go && go version"
 	case "python", "python3":
@@ -184,6 +196,9 @@ func getBunInstallScript(version string) string {
 	return `
 set -e
 
+# Ensure HOME is set (required for bun installer)
+export HOME=${HOME:-/root}
+
 # Install unzip if not present
 apt-get update && apt-get install -y unzip curl
 
@@ -213,13 +228,33 @@ if ! command -v npm &> /dev/null; then
     exit 1
 fi
 
-# Install Claude Code CLI globally
-npm install -g claude-code
+# Install Claude Code CLI globally (official package from Anthropic)
+npm install -g @anthropic-ai/claude-code
 
 # Verify installation
-claude-code --version
+claude --version
 
 echo "Claude Code installed successfully"
+`
+}
+
+func getAmpcodeInstallScript(version string) string {
+	return `
+set -e
+
+# Ensure npm is available (Ampcode is installed via npm)
+if ! command -v npm &> /dev/null; then
+    echo "Error: npm is required to install ampcode"
+    exit 1
+fi
+
+# Install Ampcode CLI globally
+npm install -g @anthropic-ai/amp
+
+# Verify installation
+amp --version
+
+echo "Ampcode installed successfully"
 `
 }
 

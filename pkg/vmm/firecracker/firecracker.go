@@ -1,9 +1,15 @@
 package firecracker
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/aetherium/aetherium/pkg/network"
@@ -11,6 +17,7 @@ import (
 	"github.com/aetherium/aetherium/pkg/vmm"
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
+	"github.com/mdlayher/vsock"
 )
 
 // FirecrackerOrchestrator implements vmm.VMOrchestrator using the official Firecracker SDK
@@ -30,8 +37,9 @@ type Config struct {
 }
 
 type vmHandle struct {
-	vm      *types.VM
-	machine *firecracker.Machine
+	vm        *types.VM
+	machine   *firecracker.Machine
+	ipAddress string // VM's IP address for TCP fallback
 }
 
 // NewFirecrackerOrchestrator creates a new Firecracker VMM orchestrator using the official SDK
@@ -87,14 +95,57 @@ func NewFirecrackerOrchestratorWithNetwork(configMap map[string]interface{}, net
 	}, nil
 }
 
+// createVMRootfs creates a per-VM copy of the rootfs template
+// This ensures VM isolation - each VM gets its own rootfs copy to prevent corruption
+func (f *FirecrackerOrchestrator) createVMRootfs(ctx context.Context, vmID string) (string, error) {
+	templatePath := "/var/firecracker/rootfs-template.ext4"
+	vmRootfsPath := fmt.Sprintf("/var/firecracker/rootfs-vm-%s.ext4", vmID)
+
+	// Check if template exists
+	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+		return "", fmt.Errorf("rootfs template not found at %s - ensure init container ran successfully", templatePath)
+	}
+
+	// Copy template to VM-specific rootfs
+	// Using cp --reflink=auto enables copy-on-write on supported filesystems (XFS, Btrfs)
+	// This makes the copy instantaneous and space-efficient
+	cmd := exec.CommandContext(ctx, "cp", "--reflink=auto", templatePath, vmRootfsPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to create VM rootfs from template: %w, output: %s", err, string(output))
+	}
+
+	// Make VM rootfs writable (template is read-only)
+	if err := os.Chmod(vmRootfsPath, 0644); err != nil {
+		// Cleanup partial file on error
+		os.Remove(vmRootfsPath)
+		return "", fmt.Errorf("failed to set permissions on VM rootfs: %w", err)
+	}
+
+	log.Printf("Created per-VM rootfs: %s (copy-on-write from template)", vmRootfsPath)
+	return vmRootfsPath, nil
+}
+
 // CreateVM creates a new Firecracker VM
 func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VMConfig) (*types.VM, error) {
-	// Validate that kernel and rootfs exist
+	// Validate that kernel exists
 	if _, err := os.Stat(config.KernelPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("kernel not found: %s", config.KernelPath)
 	}
-	if _, err := os.Stat(config.RootFSPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("rootfs not found: %s", config.RootFSPath)
+
+	// Create per-VM rootfs from template (for isolation)
+	// If config.RootFSPath is empty or points to old shared rootfs, create new per-VM copy
+	if config.RootFSPath == "" || config.RootFSPath == "/var/firecracker/rootfs.ext4" {
+		vmRootfsPath, err := f.createVMRootfs(ctx, config.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create per-VM rootfs: %w", err)
+		}
+		config.RootFSPath = vmRootfsPath
+	} else {
+		// Validate custom rootfs path exists (for backwards compatibility)
+		if _, err := os.Stat(config.RootFSPath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("rootfs not found: %s", config.RootFSPath)
+		}
 	}
 
 	// Create VM struct
@@ -165,9 +216,16 @@ func (f *FirecrackerOrchestrator) CreateVM(ctx context.Context, config *types.VM
 		return nil, fmt.Errorf("failed to create firecracker machine: %w", err)
 	}
 
+	// Extract IP address (remove CIDR suffix like /24)
+	vmIP := tapDevice.IPAddress
+	if idx := len(vmIP) - 3; idx > 0 && vmIP[idx] == '/' {
+		vmIP = vmIP[:idx]
+	}
+
 	f.vms[config.ID] = &vmHandle{
-		vm:      vm,
-		machine: machine,
+		vm:        vm,
+		machine:   machine,
+		ipAddress: vmIP,
 	}
 
 	return vm, nil
@@ -268,6 +326,19 @@ func (f *FirecrackerOrchestrator) DeleteVM(ctx context.Context, vmID string) err
 	os.Remove(handle.vm.Config.SocketPath)
 	os.Remove(handle.vm.Config.SocketPath + ".vsock")
 
+	// Clean up per-VM rootfs (self-healing)
+	// Only delete if it's a per-VM rootfs (matches pattern rootfs-vm-{id}.ext4)
+	vmRootfsPath := fmt.Sprintf("/var/firecracker/rootfs-vm-%s.ext4", vmID)
+	if _, err := os.Stat(vmRootfsPath); err == nil {
+		if err := os.Remove(vmRootfsPath); err != nil {
+			log.Printf("Warning: Failed to delete VM rootfs %s: %v", vmRootfsPath, err)
+			// Don't fail the entire deletion if rootfs cleanup fails
+			// The init container will clean it up on next pod restart
+		} else {
+			log.Printf("Deleted per-VM rootfs: %s", vmRootfsPath)
+		}
+	}
+
 	// Remove from map
 	delete(f.vms, vmID)
 
@@ -306,9 +377,33 @@ func (f *FirecrackerOrchestrator) Health(ctx context.Context) error {
 		return fmt.Errorf("kernel not found: %s", f.config.KernelPath)
 	}
 
-	// Check if rootfs template exists
-	if _, err := os.Stat(f.config.RootFSTemplate); os.IsNotExist(err) {
-		return fmt.Errorf("rootfs template not found: %s", f.config.RootFSTemplate)
+	// Check if rootfs template exists (per-VM isolation system)
+	templatePath := "/var/firecracker/rootfs-template.ext4"
+	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+		return fmt.Errorf("rootfs template not found: %s (init container may not have run)", templatePath)
+	}
+
+	// Check for excessive orphaned rootfs files
+	orphanedCount := 0
+	vmRootfsFiles, _ := filepath.Glob("/var/firecracker/rootfs-vm-*.ext4")
+
+	activeVMs := len(f.vms)
+
+	// Count orphaned files (VM rootfs exists but VM not in memory)
+	for _, file := range vmRootfsFiles {
+		vmID := filepath.Base(file)
+		vmID = vmID[len("rootfs-vm-") : len(vmID)-len(".ext4")]
+
+		_, exists := f.vms[vmID]
+
+		if !exists {
+			orphanedCount++
+		}
+	}
+
+	// Warn if orphaned files exceed threshold (may indicate init container cleanup issue)
+	if orphanedCount > 10 {
+		return fmt.Errorf("excessive orphaned rootfs files detected: %d orphaned, %d active VMs (init container should clean these)", orphanedCount, activeVMs)
 	}
 
 	// Check if /dev/kvm is accessible
@@ -339,6 +434,117 @@ func findFirecrackerBinary() string {
 	}
 
 	return ""
+}
+
+// ProvideSecretsOnBoot establishes a vsock connection and sends secrets to the VM on boot
+// This method listens for a reverse connection from the VM's fc-agent during boot
+func (f *FirecrackerOrchestrator) ProvideSecretsOnBoot(ctx context.Context, vmID string, secrets map[string]string) error {
+	if len(secrets) == 0 {
+		log.Printf("No secrets to provide for VM %s", vmID)
+		return nil
+	}
+
+	log.Printf("Preparing to provide %d secrets to VM %s", len(secrets), vmID)
+
+	// Get VM handle to verify it exists
+	_, exists := f.vms[vmID]
+	if !exists {
+		return fmt.Errorf("VM %s not found", vmID)
+	}
+
+	// Create vsock listener on host for VM to connect to
+	// The VM will dial host CID 2 (always), port 9998
+	// Use the Firecracker SDK's vsock device to accept connections
+	// We need to listen on the host side for the VM to dial
+	// The vsock.Listen function creates a listener that the guest can connect to
+	listener, err := vsock.Listen(9998, &vsock.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to create vsock listener: %w", err)
+	}
+	defer listener.Close()
+
+	log.Printf("Vsock listener created on port 9998, waiting for VM %s to connect...", vmID)
+
+	// Accept connection with timeout
+	acceptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Accept in goroutine to support timeout
+	connChan := make(chan net.Conn, 1)
+	errChan := make(chan error, 1)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		connChan <- conn
+	}()
+
+	var conn net.Conn
+	select {
+	case conn = <-connChan:
+		defer conn.Close()
+	case err := <-errChan:
+		return fmt.Errorf("failed to accept secret connection: %w", err)
+	case <-acceptCtx.Done():
+		return fmt.Errorf("timeout waiting for VM to connect for secrets")
+	}
+
+	log.Printf("VM %s connected to fetch secrets", vmID)
+
+	// Read GET_SECRETS request from VM
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read secret request: %w", err)
+	}
+
+	// Parse request
+	type Request struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload,omitempty"`
+	}
+
+	var request Request
+	if err := json.Unmarshal([]byte(line), &request); err != nil {
+		return fmt.Errorf("failed to parse secret request: %w", err)
+	}
+
+	if request.Type != "get_secrets" {
+		return fmt.Errorf("unexpected request type: %s (expected get_secrets)", request.Type)
+	}
+
+	// Prepare response with secrets
+	type Response struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload,omitempty"`
+		Error   string          `json:"error,omitempty"`
+	}
+
+	secretsPayload, err := json.Marshal(secrets)
+	if err != nil {
+		return fmt.Errorf("failed to marshal secrets: %w", err)
+	}
+
+	response := Response{
+		Type:    "success",
+		Payload: secretsPayload,
+	}
+
+	// Send response
+	data, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	if _, err := conn.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("failed to send secrets: %w", err)
+	}
+
+	log.Printf("✓ Successfully provided %d secrets to VM %s (in-memory only)", len(secrets), vmID)
+	return nil
 }
 
 // Ensure FirecrackerOrchestrator implements vmm.VMOrchestrator

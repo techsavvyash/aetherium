@@ -22,6 +22,7 @@ import (
 	"github.com/aetherium/aetherium/pkg/logging/loki"
 	"github.com/aetherium/aetherium/pkg/queue/asynq"
 	"github.com/aetherium/aetherium/pkg/service"
+	"github.com/aetherium/aetherium/pkg/storage"
 	"github.com/aetherium/aetherium/pkg/storage/postgres"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -30,11 +31,13 @@ import (
 )
 
 type Server struct {
-	taskService   *service.TaskService
-	workerService *service.WorkerService
-	integrations  *integrations.Registry
-	logger        *loki.LokiLogger
-	eventBus      *redis.RedisEventBus
+	store            *postgres.Store
+	taskService      *service.TaskService
+	workerService    *service.WorkerService
+	workspaceService *service.WorkspaceService
+	integrations     *integrations.Registry
+	logger           *loki.LokiLogger
+	eventBus         *redis.RedisEventBus
 }
 
 func main() {
@@ -134,6 +137,14 @@ func main() {
 	// Create task service
 	taskService := service.NewTaskService(queue, store)
 
+	// Create workspace service
+	encryptionKey := getEnv("WORKSPACE_ENCRYPTION_KEY", "")
+	workspaceService, err := service.NewWorkspaceService(queue, store, encryptionKey)
+	if err != nil {
+		log.Fatalf("Failed to initialize workspace service: %v", err)
+	}
+	log.Println("✓ Workspace service initialized")
+
 	// Initialize service discovery (optional)
 	var workerService *service.WorkerService
 	var consulRegistry discovery.ServiceRegistry
@@ -170,11 +181,13 @@ func main() {
 
 	// Create server
 	srv := &Server{
-		taskService:   taskService,
-		workerService: workerService,
-		integrations:  registry,
-		logger:        logger,
-		eventBus:      eventBus,
+		store:            store,
+		taskService:      taskService,
+		workerService:    workerService,
+		workspaceService: workspaceService,
+		integrations:     registry,
+		logger:           logger,
+		eventBus:         eventBus,
 	}
 
 	// Setup router
@@ -234,6 +247,26 @@ func main() {
 
 		// Integrations
 		r.Post("/webhooks/{integration}", srv.handleWebhook)
+
+		// Environments
+		r.Post("/environments", srv.createEnvironment)
+		r.Get("/environments", srv.listEnvironments)
+		r.Get("/environments/{id}", srv.getEnvironment)
+		r.Put("/environments/{id}", srv.updateEnvironment)
+		r.Delete("/environments/{id}", srv.deleteEnvironment)
+
+		// Workspaces
+		r.Post("/workspaces", srv.createWorkspace)
+		r.Get("/workspaces", srv.listWorkspaces)
+		r.Get("/workspaces/{id}", srv.getWorkspace)
+		r.Delete("/workspaces/{id}", srv.deleteWorkspace)
+		r.Post("/workspaces/{id}/prompts", srv.submitPrompt)
+		r.Get("/workspaces/{id}/prompts", srv.listPrompts)
+		r.Get("/workspaces/{id}/prompts/{promptId}", srv.getPrompt)
+		r.Post("/workspaces/{id}/secrets", srv.addSecret)
+		r.Get("/workspaces/{id}/secrets", srv.listSecrets)
+		r.Delete("/workspaces/{id}/secrets/{secretId}", srv.deleteSecret)
+		r.Get("/workspaces/{id}/session", srv.workspaceSession) // WebSocket
 
 		// Health
 		r.Get("/health", srv.health)
@@ -752,9 +785,558 @@ func (s *Server) getVMDistribution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"distribution": distribution,
+		"distribution":  distribution,
 		"total_workers": len(distribution),
 	})
+}
+
+// Workspace handlers
+
+func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
+	var req api.CreateWorkspaceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	// Validate required fields
+	if req.Name == "" {
+		respondError(w, http.StatusBadRequest, "Name is required", nil)
+		return
+	}
+	if req.VCPUs < 1 {
+		req.VCPUs = 1
+	}
+	if req.MemoryMB < 128 {
+		req.MemoryMB = 512
+	}
+	if req.AIAssistant == "" {
+		req.AIAssistant = "claude-code"
+	}
+
+	taskID, workspaceID, err := s.workspaceService.CreateWorkspace(r.Context(), &req)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to create workspace", err)
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, api.CreateWorkspaceResponse{
+		TaskID:      taskID,
+		WorkspaceID: workspaceID,
+		Status:      "creating",
+	})
+}
+
+func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
+	workspaces, err := s.workspaceService.ListWorkspaces(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to list workspaces", err)
+		return
+	}
+
+	responses := make([]*api.WorkspaceResponse, len(workspaces))
+	for i, ws := range workspaces {
+		responses[i] = storageWorkspaceToResponse(ws)
+	}
+
+	respondJSON(w, http.StatusOK, api.ListWorkspacesResponse{
+		Workspaces: responses,
+		Total:      len(responses),
+	})
+}
+
+func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	workspace, err := s.workspaceService.GetWorkspace(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Workspace not found", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, storageWorkspaceToResponse(workspace))
+}
+
+func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	taskID, err := s.workspaceService.DeleteWorkspace(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to delete workspace", err)
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, api.TaskResponse{
+		ID:     taskID,
+		Type:   "workspace:delete",
+		Status: "pending",
+	})
+}
+
+func (s *Server) submitPrompt(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	workspaceID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	var req api.SubmitPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	if req.Prompt == "" {
+		respondError(w, http.StatusBadRequest, "Prompt is required", nil)
+		return
+	}
+
+	promptID, err := s.workspaceService.SubmitPrompt(r.Context(), workspaceID, &req)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to submit prompt", err)
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, api.SubmitPromptResponse{
+		PromptID:    promptID,
+		WorkspaceID: workspaceID,
+		Status:      "pending",
+	})
+}
+
+func (s *Server) listPrompts(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	workspaceID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	prompts, err := s.workspaceService.ListPrompts(r.Context(), workspaceID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to list prompts", err)
+		return
+	}
+
+	responses := make([]*api.PromptResponse, len(prompts))
+	for i, p := range prompts {
+		responses[i] = storagePromptToResponse(p)
+	}
+
+	respondJSON(w, http.StatusOK, api.ListPromptsResponse{
+		Prompts: responses,
+		Total:   len(responses),
+	})
+}
+
+func (s *Server) getPrompt(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "promptId")
+	promptID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid prompt ID", err)
+		return
+	}
+
+	prompt, err := s.workspaceService.GetPrompt(r.Context(), promptID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Prompt not found", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, storagePromptToResponse(prompt))
+}
+
+func (s *Server) addSecret(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	workspaceID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	var req api.AddSecretRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	if req.Name == "" || req.Value == "" {
+		respondError(w, http.StatusBadRequest, "Name and value are required", nil)
+		return
+	}
+
+	secretID, err := s.workspaceService.AddSecret(r.Context(), workspaceID, &req)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to add secret", err)
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, api.AddSecretResponse{
+		SecretID: secretID,
+		Name:     req.Name,
+		Status:   "created",
+	})
+}
+
+func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	workspaceID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	secrets, err := s.workspaceService.ListSecrets(r.Context(), workspaceID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to list secrets", err)
+		return
+	}
+
+	// Only return metadata, never the actual values
+	responses := make([]*api.SecretResponse, len(secrets))
+	for i, secret := range secrets {
+		description := ""
+		if secret.Description != nil {
+			description = *secret.Description
+		}
+		responses[i] = &api.SecretResponse{
+			ID:          secret.ID,
+			Name:        secret.Name,
+			Type:        secret.SecretType,
+			Description: description,
+			Scope:       secret.Scope,
+			CreatedAt:   secret.CreatedAt,
+			UpdatedAt:   secret.UpdatedAt,
+		}
+	}
+
+	respondJSON(w, http.StatusOK, api.ListSecretsResponse{
+		Secrets: responses,
+		Total:   len(responses),
+	})
+}
+
+func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
+	secretIDStr := chi.URLParam(r, "secretId")
+	secretID, err := uuid.Parse(secretIDStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid secret ID", err)
+		return
+	}
+
+	if err := s.workspaceService.DeleteSecret(r.Context(), secretID); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to delete secret", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) workspaceSession(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement WebSocket session handler
+	// This will be implemented in pkg/websocket/session.go
+	respondError(w, http.StatusNotImplemented, "WebSocket sessions not yet implemented", nil)
+}
+
+// Environment handlers
+
+func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
+	var req api.CreateEnvironmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	// Validate required fields
+	if req.Name == "" {
+		respondError(w, http.StatusBadRequest, "Name is required", nil)
+		return
+	}
+
+	// Convert request to storage type
+	env := &storage.Environment{
+		Name:               req.Name,
+		GitRepoURL:         req.GitRepoURL,
+		GitBranch:          req.GitBranch,
+		WorkingDirectory:   req.WorkingDirectory,
+		VCPUs:              req.VCPUs,
+		MemoryMB:           req.MemoryMB,
+		Tools:              req.Tools,
+		EnvVars:            req.EnvVars,
+		IdleTimeoutSeconds: req.IdleTimeoutSeconds,
+	}
+
+	if req.Description != "" {
+		env.Description = &req.Description
+	}
+
+	// Convert MCP servers
+	if len(req.MCPServers) > 0 {
+		env.MCPServers = make([]storage.MCPServerConfig, len(req.MCPServers))
+		for i, mcp := range req.MCPServers {
+			env.MCPServers[i] = storage.MCPServerConfig{
+				Name:    mcp.Name,
+				Type:    storage.MCPServerType(mcp.Type),
+				Command: mcp.Command,
+				Args:    mcp.Args,
+				URL:     mcp.URL,
+				Headers: mcp.Headers,
+				Env:     mcp.Env,
+			}
+		}
+	}
+
+	if err := s.store.Environments().Create(r.Context(), env); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to create environment", err)
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, storageEnvironmentToResponse(env))
+}
+
+func (s *Server) listEnvironments(w http.ResponseWriter, r *http.Request) {
+	environments, err := s.store.Environments().List(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to list environments", err)
+		return
+	}
+
+	responses := make([]*api.EnvironmentResponse, len(environments))
+	for i, env := range environments {
+		responses[i] = storageEnvironmentToResponse(env)
+	}
+
+	respondJSON(w, http.StatusOK, api.ListEnvironmentsResponse{
+		Environments: responses,
+		Total:        len(responses),
+	})
+}
+
+func (s *Server) getEnvironment(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid environment ID", err)
+		return
+	}
+
+	env, err := s.store.Environments().Get(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Environment not found", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, storageEnvironmentToResponse(env))
+}
+
+func (s *Server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid environment ID", err)
+		return
+	}
+
+	// Get existing environment
+	env, err := s.store.Environments().Get(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Environment not found", err)
+		return
+	}
+
+	var req api.UpdateEnvironmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	// Update fields if provided
+	if req.Name != "" {
+		env.Name = req.Name
+	}
+	if req.Description != "" {
+		env.Description = &req.Description
+	}
+	if req.VCPUs > 0 {
+		env.VCPUs = req.VCPUs
+	}
+	if req.MemoryMB > 0 {
+		env.MemoryMB = req.MemoryMB
+	}
+	if req.GitRepoURL != "" {
+		env.GitRepoURL = req.GitRepoURL
+	}
+	if req.GitBranch != "" {
+		env.GitBranch = req.GitBranch
+	}
+	if req.WorkingDirectory != "" {
+		env.WorkingDirectory = req.WorkingDirectory
+	}
+	if req.Tools != nil {
+		env.Tools = req.Tools
+	}
+	if req.EnvVars != nil {
+		env.EnvVars = req.EnvVars
+	}
+	if req.IdleTimeoutSeconds > 0 {
+		env.IdleTimeoutSeconds = req.IdleTimeoutSeconds
+	}
+
+	// Update MCP servers if provided
+	if req.MCPServers != nil {
+		env.MCPServers = make([]storage.MCPServerConfig, len(req.MCPServers))
+		for i, mcp := range req.MCPServers {
+			env.MCPServers[i] = storage.MCPServerConfig{
+				Name:    mcp.Name,
+				Type:    storage.MCPServerType(mcp.Type),
+				Command: mcp.Command,
+				Args:    mcp.Args,
+				URL:     mcp.URL,
+				Headers: mcp.Headers,
+				Env:     mcp.Env,
+			}
+		}
+	}
+
+	if err := s.store.Environments().Update(r.Context(), env); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to update environment", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, storageEnvironmentToResponse(env))
+}
+
+func (s *Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid environment ID", err)
+		return
+	}
+
+	if err := s.store.Environments().Delete(r.Context(), id); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to delete environment", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Environment response helper
+func storageEnvironmentToResponse(env *storage.Environment) *api.EnvironmentResponse {
+	resp := &api.EnvironmentResponse{
+		ID:                 env.ID,
+		Name:               env.Name,
+		VCPUs:              env.VCPUs,
+		MemoryMB:           env.MemoryMB,
+		GitRepoURL:         env.GitRepoURL,
+		GitBranch:          env.GitBranch,
+		WorkingDirectory:   env.WorkingDirectory,
+		Tools:              env.Tools,
+		EnvVars:            env.EnvVars,
+		IdleTimeoutSeconds: env.IdleTimeoutSeconds,
+		CreatedAt:          env.CreatedAt,
+		UpdatedAt:          env.UpdatedAt,
+	}
+
+	if env.Description != nil {
+		resp.Description = *env.Description
+	}
+
+	// Convert MCP servers
+	if len(env.MCPServers) > 0 {
+		resp.MCPServers = make([]api.MCPServerResponse, len(env.MCPServers))
+		for i, mcp := range env.MCPServers {
+			resp.MCPServers[i] = api.MCPServerResponse{
+				Name:    mcp.Name,
+				Type:    string(mcp.Type),
+				Command: mcp.Command,
+				Args:    mcp.Args,
+				URL:     mcp.URL,
+				Headers: mcp.Headers,
+				Env:     mcp.Env,
+			}
+		}
+	}
+
+	return resp
+}
+
+// Workspace response helpers
+
+func storageWorkspaceToResponse(ws *storage.Workspace) *api.WorkspaceResponse {
+	resp := &api.WorkspaceResponse{
+		ID:                ws.ID,
+		Name:              ws.Name,
+		Status:            ws.Status,
+		AIAssistant:       ws.AIAssistant,
+		AIAssistantConfig: ws.AIAssistantConfig,
+		WorkingDirectory:  ws.WorkingDirectory,
+		CreatedAt:         ws.CreatedAt,
+		ReadyAt:           ws.ReadyAt,
+		StoppedAt:         ws.StoppedAt,
+		IdleSince:         ws.IdleSince,
+		Metadata:          ws.Metadata,
+	}
+	if ws.Description != nil {
+		resp.Description = *ws.Description
+	}
+	if ws.VMID != nil {
+		resp.VMID = ws.VMID
+	}
+	if ws.EnvironmentID != nil {
+		resp.EnvironmentID = ws.EnvironmentID
+	}
+	return resp
+}
+
+func storagePromptToResponse(p *storage.PromptTask) *api.PromptResponse {
+	resp := &api.PromptResponse{
+		ID:          p.ID,
+		WorkspaceID: p.WorkspaceID,
+		Prompt:      p.Prompt,
+		Priority:    p.Priority,
+		Status:      p.Status,
+		CreatedAt:   p.CreatedAt,
+		ScheduledAt: p.ScheduledAt,
+		StartedAt:   p.StartedAt,
+		CompletedAt: p.CompletedAt,
+		DurationMS:  p.DurationMS,
+		Metadata:    p.Metadata,
+	}
+	if p.SystemPrompt != nil {
+		resp.SystemPrompt = *p.SystemPrompt
+	}
+	if p.WorkingDirectory != nil {
+		resp.WorkingDirectory = *p.WorkingDirectory
+	}
+	if p.Environment != nil {
+		resp.Environment = p.Environment
+	}
+	if p.ExitCode != nil {
+		resp.ExitCode = p.ExitCode
+	}
+	if p.Stdout != nil {
+		resp.Stdout = p.Stdout
+	}
+	if p.Stderr != nil {
+		resp.Stderr = p.Stderr
+	}
+	if p.Error != nil {
+		resp.Error = p.Error
+	}
+	return resp
 }
 
 // Helper functions

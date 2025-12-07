@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"sync"
@@ -175,7 +176,20 @@ func (m *Manager) setupNAT() error {
 		}
 	}
 
-	// Check if rule already exists
+	log.Printf("Network: Using host interface %s for NAT", hostIface)
+
+	// Clean up any old NAT rules with wrong interfaces (e.g., eth0)
+	// This prevents issues when switching network interfaces
+	commonWrongIfaces := []string{"eth0", "eth1", "wlan0", "wlan1"}
+	for _, wrongIface := range commonWrongIfaces {
+		if wrongIface != hostIface {
+			// Try to delete rule with wrong interface (ignore errors if it doesn't exist)
+			exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
+				"-s", m.config.SubnetCIDR, "-o", wrongIface, "-j", "MASQUERADE").Run()
+		}
+	}
+
+	// Check if rule already exists with correct interface
 	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
 		"-s", m.config.SubnetCIDR, "-o", hostIface, "-j", "MASQUERADE")
 	if checkCmd.Run() != nil {
@@ -185,17 +199,31 @@ func (m *Manager) setupNAT() error {
 		if err := addCmd.Run(); err != nil {
 			return fmt.Errorf("failed to add NAT rule: %w", err)
 		}
+		log.Printf("Network: Added NAT MASQUERADE rule for %s -> %s", m.config.SubnetCIDR, hostIface)
 	}
 
-	// Allow forwarding
+	// Allow forwarding from bridge (inbound)
 	checkForward := exec.Command("iptables", "-C", "FORWARD",
 		"-i", m.config.BridgeName, "-j", "ACCEPT")
 	if checkForward.Run() != nil {
 		addForward := exec.Command("iptables", "-A", "FORWARD",
 			"-i", m.config.BridgeName, "-j", "ACCEPT")
 		if err := addForward.Run(); err != nil {
-			return fmt.Errorf("failed to add forward rule: %w", err)
+			return fmt.Errorf("failed to add forward rule (inbound): %w", err)
 		}
+		log.Printf("Network: Added FORWARD rule for bridge inbound traffic")
+	}
+
+	// Allow forwarding to bridge (outbound/return traffic)
+	checkForwardOut := exec.Command("iptables", "-C", "FORWARD",
+		"-o", m.config.BridgeName, "-j", "ACCEPT")
+	if checkForwardOut.Run() != nil {
+		addForwardOut := exec.Command("iptables", "-A", "FORWARD",
+			"-o", m.config.BridgeName, "-j", "ACCEPT")
+		if err := addForwardOut.Run(); err != nil {
+			return fmt.Errorf("failed to add forward rule (outbound): %w", err)
+		}
+		log.Printf("Network: Added FORWARD rule for bridge outbound traffic")
 	}
 
 	return nil

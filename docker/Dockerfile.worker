@@ -18,9 +18,12 @@
 # =============================================================================
 # Stage 1: Build Worker Binary
 # =============================================================================
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
+
+# Enable automatic toolchain download for newer Go versions
+ENV GOTOOLCHAIN=auto
 
 WORKDIR /build
 
@@ -35,12 +38,19 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /build/bin/worker \
     ./cmd/worker
 
+# Build fc-agent (static binary for rootfs)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /build/bin/fc-agent \
+    ./cmd/fc-agent
+
 # =============================================================================
 # Stage 2: Minimal Runtime
 # =============================================================================
 FROM alpine:3.19
 
 # Minimal dependencies - network tools for TAP/bridge management
+# Note: iptables-legacy is needed because some hosts use legacy iptables
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
@@ -48,13 +58,15 @@ RUN apk add --no-cache \
     jq \
     iproute2 \
     iptables \
+    iptables-legacy \
     bridge-utils
 
 # Create required directories
 RUN mkdir -p /etc/aetherium /var/log/aetherium
 
-# Copy worker binary only (Firecracker is on the host)
+# Copy worker binary and fc-agent (for rootfs installation)
 COPY --from=builder /build/bin/worker /usr/local/bin/worker
+COPY --from=builder /build/bin/fc-agent /usr/local/bin/fc-agent
 
 # Copy entrypoint script
 COPY docker/scripts/worker-entrypoint.sh /usr/local/bin/entrypoint.sh

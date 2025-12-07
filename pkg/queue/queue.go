@@ -12,13 +12,19 @@ import (
 type TaskType string
 
 const (
-	TaskTypeVMCreate     TaskType = "vm:create"
-	TaskTypeVMStart      TaskType = "vm:start"
-	TaskTypeVMStop       TaskType = "vm:stop"
-	TaskTypeVMDelete     TaskType = "vm:delete"
-	TaskTypeVMExecute    TaskType = "vm:execute"
-	TaskTypeJobExecute   TaskType = "job:execute"
-	TaskTypeIntegration  TaskType = "integration:run"
+	// VM task types
+	TaskTypeVMCreate    TaskType = "vm:create"
+	TaskTypeVMStart     TaskType = "vm:start"
+	TaskTypeVMStop      TaskType = "vm:stop"
+	TaskTypeVMDelete    TaskType = "vm:delete"
+	TaskTypeVMExecute   TaskType = "vm:execute"
+	TaskTypeJobExecute  TaskType = "job:execute"
+	TaskTypeIntegration TaskType = "integration:run"
+
+	// Workspace task types
+	TaskTypeWorkspaceCreate TaskType = "workspace:create"
+	TaskTypeWorkspaceDelete TaskType = "workspace:delete"
+	TaskTypePromptExecute   TaskType = "prompt:execute"
 )
 
 // Task represents a distributed task
