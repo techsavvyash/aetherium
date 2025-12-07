@@ -58,9 +58,16 @@ set -e
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Configure DNS
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+# Configure DNS - IMPORTANT: Remove systemd-resolved symlink and use static file
+# systemd-resolved creates a symlink to /run/systemd/resolve/stub-resolv.conf
+# which points to 127.0.0.53 - this doesn't work in Firecracker VMs
+rm -f /etc/resolv.conf
+cat > /etc/resolv.conf << DNSEOF
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+DNSEOF
+# Make it immutable to prevent systemd-resolved from overwriting
+chattr +i /etc/resolv.conf 2>/dev/null || true
 
 # Configure apt sources
 cat > /etc/apt/sources.list << EOF
@@ -105,9 +112,9 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 echo 'export BUN_INSTALL="/root/.bun"' >> /root/.bashrc
 echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /root/.bashrc
 
-# Install Claude Code (requires npm)
+# Install Claude Code (requires npm) - Official package from Anthropic
 echo "Installing Claude Code..."
-npm install -g claude-code || echo "Warning: Claude Code installation may require specific configuration"
+npm install -g @anthropic-ai/claude-code || echo "Warning: Claude Code installation may require specific configuration"
 
 # Create systemd service for fc-agent
 cat > /etc/systemd/system/fc-agent.service << EOF
@@ -137,6 +144,11 @@ echo "root:aetherium" | chpasswd || echo "Warning: chpasswd not available, skipp
 # Configure SSH
 sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 systemctl enable ssh
+
+# Disable systemd-resolved (we use static DNS in /etc/resolv.conf)
+# This prevents systemd from overwriting our DNS config on boot
+systemctl disable systemd-resolved.service 2>/dev/null || true
+systemctl mask systemd-resolved.service 2>/dev/null || true
 
 # Clean up
 apt-get clean

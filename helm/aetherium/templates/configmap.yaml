@@ -46,8 +46,11 @@ data:
         {{- if .Values.postgresql.enabled }}
         database: {{ .Values.postgresql.auth.database | quote }}
         user: {{ .Values.postgresql.auth.username | quote }}
+        password: {{ .Values.postgresql.auth.password | quote }}
         {{- else }}
         database: {{ .Values.postgresql.external.database | quote }}
+        user: {{ .Values.postgresql.external.user | default "aetherium" | quote }}
+        password: {{ .Values.postgresql.external.password | default "" | quote }}
         {{- end }}
         ssl_mode: {{ if eq .Values.global.environment "production" }}require{{ else }}disable{{ end }}
 

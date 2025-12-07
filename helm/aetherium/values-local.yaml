@@ -15,7 +15,7 @@
 
 global:
   environment: development
-  imageRegistry: ""  # Use local images
+  imageRegistry: ""  # Don't set global registry - subcharts handle their own
   imagePullPolicy: IfNotPresent
 
 # API Gateway - minimal resources
@@ -23,8 +23,9 @@ apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: aetherium/api-gateway
+    repository: localhost:5000/aetherium/api-gateway
     tag: dev
+    pullPolicy: Always
   service:
     type: NodePort
     port: 8080
@@ -35,6 +36,18 @@ apiGateway:
     limits:
       memory: "256Mi"
       cpu: "250m"
+  livenessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
 
 # Worker - Firecracker mode with KVM
 worker:
@@ -42,18 +55,19 @@ worker:
   kind: Deployment  # Use Deployment for local (single node)
   replicaCount: 1
   image:
-    repository: aetherium/worker
+    repository: localhost:5000/aetherium/worker
     tag: dev
+    pullPolicy: Always
   # For local testing, we assume the node has KVM
   nodeSelector: {}
   tolerations: []
   resources:
     requests:
-      memory: "256Mi"
+      memory: "512Mi"
       cpu: "100m"
     limits:
-      memory: "2Gi"
-      cpu: "2000m"
+      memory: "8Gi"
+      cpu: "4000m"
 
   # Required for Firecracker: host networking for TAP/bridge
   hostNetwork: true
@@ -81,6 +95,10 @@ worker:
       hostPath:
         path: /run/aetherium
         type: DirectoryOrCreate
+    - name: firecracker-bin
+      hostPath:
+        path: /usr/local/bin/firecracker
+        type: File
 
   volumeMounts:
     - name: dev-kvm
@@ -89,9 +107,11 @@ worker:
       mountPath: /dev/vhost-vsock
     - name: firecracker-assets
       mountPath: /var/firecracker
-      readOnly: true
     - name: run-aetherium
       mountPath: /run/aetherium
+    - name: firecracker-bin
+      mountPath: /usr/local/bin/firecracker
+      readOnly: true
 
 # Disable node provisioner (Firecracker already installed locally)
 nodeProvisioner:
@@ -111,6 +131,10 @@ consul:
 # PostgreSQL - minimal
 postgresql:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnami/postgresql
+    tag: latest  # Use latest tag
   auth:
     username: aetherium
     password: aetherium
@@ -126,6 +150,10 @@ postgresql:
 # Redis - minimal
 redis:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnami/redis
+    tag: latest  # Use latest tag
   architecture: standalone
   auth:
     enabled: false

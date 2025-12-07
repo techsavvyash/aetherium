@@ -13,6 +13,7 @@ import (
 	"github.com/aetherium/aetherium/pkg/discovery"
 	"github.com/aetherium/aetherium/pkg/discovery/consul"
 	"github.com/aetherium/aetherium/pkg/queue/asynq"
+	"github.com/aetherium/aetherium/pkg/service"
 	"github.com/aetherium/aetherium/pkg/storage/postgres"
 	"github.com/aetherium/aetherium/pkg/vmm/firecracker"
 	"github.com/aetherium/aetherium/pkg/worker"
@@ -141,14 +142,37 @@ func main() {
 		w = worker.New(store, orchestrator)
 	}
 
-	// Register handlers
+	// Register VM handlers
 	if err := w.RegisterHandlers(queue); err != nil {
 		log.Fatalf("Failed to register handlers: %v", err)
+	}
+
+	// Initialize WorkspaceService for secret decryption
+	encryptionKey := getEnv("WORKSPACE_ENCRYPTION_KEY", "")
+	workspaceService, err := service.NewWorkspaceService(queue, store, encryptionKey)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize workspace service: %v", err)
+		log.Println("  Workspace features will be limited")
+	} else {
+		// Set workspace service on worker for secret decryption
+		w.SetWorkspaceService(workspaceService)
+
+		// Register workspace handlers
+		if err := w.RegisterWorkspaceHandlers(queue); err != nil {
+			log.Fatalf("Failed to register workspace handlers: %v", err)
+		}
+		log.Println("  Registered handlers: workspace:create, workspace:delete, prompt:execute")
 	}
 
 	log.Println("✓ Worker initialized successfully")
 	log.Println("  Registered handlers: vm:create, vm:execute, vm:delete")
 	log.Println("  Listening for tasks on Redis queue...")
+
+	// Start idle VM cleanup worker (checks for idle workspaces and destroys VMs after timeout)
+	idleCleanupCtx, idleCleanupCancel := context.WithCancel(context.Background())
+	idleCheckInterval := time.Duration(getEnvInt("IDLE_CHECK_INTERVAL_SECONDS", 60)) * time.Second
+	w.StartIdleCleanup(idleCleanupCtx, idleCheckInterval)
+	log.Printf("  Started idle VM cleanup worker (check interval: %v)", idleCheckInterval)
 
 	// Start processing tasks
 	ctx, cancel := context.WithCancel(context.Background())
@@ -166,6 +190,10 @@ func main() {
 	log.Println("Shutting down worker...")
 	cancel()
 
+	// Stop idle cleanup worker
+	idleCleanupCancel()
+	log.Println("  Stopped idle VM cleanup worker")
+
 	// Deregister worker from Consul
 	if consulAddr != "" {
 		deregCtx, deregCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -176,6 +204,28 @@ func main() {
 		} else {
 			log.Println("✓ Worker deregistered from Consul")
 		}
+	}
+
+	// Cleanup all VMs (this will delete per-VM rootfs files)
+	log.Println("Cleaning up VMs...")
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cleanupCancel()
+
+	vms, err := orchestrator.ListVMs(cleanupCtx)
+	if err != nil {
+		log.Printf("Warning: Failed to list VMs during cleanup: %v", err)
+	} else if len(vms) > 0 {
+		log.Printf("  Found %d VMs to cleanup", len(vms))
+		for _, vm := range vms {
+			if err := orchestrator.DeleteVM(cleanupCtx, vm.ID); err != nil {
+				log.Printf("  Warning: Failed to delete VM %s: %v", vm.ID, err)
+			} else {
+				log.Printf("  ✓ Deleted VM %s and its rootfs", vm.ID)
+			}
+		}
+		log.Println("✓ VM cleanup complete")
+	} else {
+		log.Println("  No VMs to cleanup")
 	}
 
 	// Stop queue
