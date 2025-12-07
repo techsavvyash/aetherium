@@ -11,6 +11,7 @@ import (
 
 	"github.com/aetherium/aetherium/pkg/discovery"
 	"github.com/aetherium/aetherium/pkg/queue"
+	"github.com/aetherium/aetherium/pkg/service"
 	"github.com/aetherium/aetherium/pkg/storage"
 	"github.com/aetherium/aetherium/pkg/tools"
 	"github.com/aetherium/aetherium/pkg/types"
@@ -21,18 +22,19 @@ import (
 // Worker handles task execution
 type Worker struct {
 	// Core dependencies
-	store         storage.Store
-	orchestrator  vmm.VMOrchestrator
-	toolInstaller *tools.Installer
+	store            storage.Store
+	orchestrator     vmm.VMOrchestrator
+	toolInstaller    *tools.Installer
+	workspaceService *service.WorkspaceService
 
 	// Service discovery
 	registry   discovery.ServiceRegistry
 	workerInfo *discovery.WorkerInfo
 
 	// Resource tracking
-	mu               sync.RWMutex
-	runningVMs       map[string]*vmResourceUsage
-	tasksProcessed   int
+	mu             sync.RWMutex
+	runningVMs     map[string]*vmResourceUsage
+	tasksProcessed int
 
 	// Heartbeat control
 	heartbeatCancel context.CancelFunc
@@ -330,7 +332,7 @@ func (w *Worker) HandleVMCreate(ctx context.Context, task *queue.Task) (*queue.T
 	vmConfig := &types.VMConfig{
 		ID:         vmID,
 		KernelPath: "/var/firecracker/vmlinux",
-		RootFSPath: "/var/firecracker/rootfs.ext4",
+		RootFSPath: "", // Will be set by orchestrator.CreateVM() from template
 		SocketPath: fmt.Sprintf("/tmp/aetherium-vm-%s.sock", vmID),
 		VCPUCount:  payload.VCPUs,
 		MemoryMB:   payload.MemoryMB,

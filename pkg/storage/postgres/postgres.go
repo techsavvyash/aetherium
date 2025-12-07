@@ -14,13 +14,20 @@ import (
 
 // Store implements storage.Store using PostgreSQL
 type Store struct {
-	db            *sqlx.DB
-	vms           storage.VMRepository
-	tasks         storage.TaskRepository
-	jobs          storage.JobRepository
-	executions    storage.ExecutionRepository
-	workers       storage.WorkerRepository
-	workerMetrics storage.WorkerMetricRepository
+	db              *sqlx.DB
+	vms             storage.VMRepository
+	tasks           storage.TaskRepository
+	jobs            storage.JobRepository
+	executions      storage.ExecutionRepository
+	workers         storage.WorkerRepository
+	workerMetrics   storage.WorkerMetricRepository
+	environments    storage.EnvironmentRepository
+	workspaces      storage.WorkspaceRepository
+	secrets         storage.SecretRepository
+	prepSteps       storage.PrepStepRepository
+	promptTasks     storage.PromptTaskRepository
+	sessions        storage.SessionRepository
+	sessionMessages storage.SessionMessageRepository
 }
 
 // Config holds PostgreSQL configuration
@@ -55,13 +62,20 @@ func NewStore(config Config) (*Store, error) {
 	}
 
 	store := &Store{
-		db:            db,
-		vms:           &vmRepository{db: db},
-		tasks:         &taskRepository{db: db},
-		jobs:          &jobRepository{db: db},
-		executions:    &executionRepository{db: db},
-		workers:       &workerRepository{db: db},
-		workerMetrics: &workerMetricRepository{db: db},
+		db:              db,
+		vms:             &vmRepository{db: db},
+		tasks:           &taskRepository{db: db},
+		jobs:            &jobRepository{db: db},
+		executions:      &executionRepository{db: db},
+		workers:         &workerRepository{db: db},
+		workerMetrics:   &workerMetricRepository{db: db},
+		environments:    &environmentRepository{db: db},
+		workspaces:      &workspaceRepository{db: db},
+		secrets:         &secretRepository{db: db},
+		prepSteps:       &prepStepRepository{db: db},
+		promptTasks:     &promptTaskRepository{db: db},
+		sessions:        &sessionRepository{db: db},
+		sessionMessages: &sessionMessageRepository{db: db},
 	}
 
 	return store, nil
@@ -118,6 +132,41 @@ func (s *Store) Workers() storage.WorkerRepository {
 // WorkerMetrics returns the worker metrics repository
 func (s *Store) WorkerMetrics() storage.WorkerMetricRepository {
 	return s.workerMetrics
+}
+
+// Environments returns the environment repository
+func (s *Store) Environments() storage.EnvironmentRepository {
+	return s.environments
+}
+
+// Workspaces returns the workspace repository
+func (s *Store) Workspaces() storage.WorkspaceRepository {
+	return s.workspaces
+}
+
+// Secrets returns the secret repository
+func (s *Store) Secrets() storage.SecretRepository {
+	return s.secrets
+}
+
+// PrepSteps returns the prep step repository
+func (s *Store) PrepSteps() storage.PrepStepRepository {
+	return s.prepSteps
+}
+
+// PromptTasks returns the prompt task repository
+func (s *Store) PromptTasks() storage.PromptTaskRepository {
+	return s.promptTasks
+}
+
+// Sessions returns the session repository
+func (s *Store) Sessions() storage.SessionRepository {
+	return s.sessions
+}
+
+// SessionMessages returns the session message repository
+func (s *Store) SessionMessages() storage.SessionMessageRepository {
+	return s.sessionMessages
 }
 
 // Close closes the database connection

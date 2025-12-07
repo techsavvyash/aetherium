@@ -7,6 +7,18 @@ import type {
   CreateVMRequest,
   ExecuteCommandRequest,
   ApiResponse,
+  Workspace,
+  PromptTask,
+  Secret,
+  CreateWorkspaceRequest,
+  CreateWorkspaceResponse,
+  SubmitPromptRequest,
+  SubmitPromptResponse,
+  AddSecretRequest,
+  AddSecretResponse,
+  Environment,
+  CreateEnvironmentRequest,
+  UpdateEnvironmentRequest,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -81,6 +93,76 @@ export const api = {
 
   // Health
   health: () => fetchApi<{ status: string }>("/api/v1/health"),
+
+  // Workspaces
+  listWorkspaces: () =>
+    fetchApi<{ workspaces: Workspace[]; total: number }>("/api/v1/workspaces"),
+
+  getWorkspace: (id: string) =>
+    fetchApi<Workspace>(`/api/v1/workspaces/${id}`),
+
+  createWorkspace: (req: CreateWorkspaceRequest) =>
+    fetchApi<CreateWorkspaceResponse>("/api/v1/workspaces", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  deleteWorkspace: (id: string) =>
+    fetchApi<{ id: string; type: string; status: string }>(`/api/v1/workspaces/${id}`, {
+      method: "DELETE",
+    }),
+
+  // Prompts
+  submitPrompt: (workspaceId: string, req: SubmitPromptRequest) =>
+    fetchApi<SubmitPromptResponse>(`/api/v1/workspaces/${workspaceId}/prompts`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  listPrompts: (workspaceId: string) =>
+    fetchApi<{ prompts: PromptTask[]; total: number }>(`/api/v1/workspaces/${workspaceId}/prompts`),
+
+  getPrompt: (workspaceId: string, promptId: string) =>
+    fetchApi<PromptTask>(`/api/v1/workspaces/${workspaceId}/prompts/${promptId}`),
+
+  // Secrets
+  addSecret: (workspaceId: string, req: AddSecretRequest) =>
+    fetchApi<AddSecretResponse>(`/api/v1/workspaces/${workspaceId}/secrets`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  listSecrets: (workspaceId: string) =>
+    fetchApi<{ secrets: Secret[]; total: number }>(`/api/v1/workspaces/${workspaceId}/secrets`),
+
+  deleteSecret: (workspaceId: string, secretId: string) =>
+    fetchApi<{ status: string }>(`/api/v1/workspaces/${workspaceId}/secrets/${secretId}`, {
+      method: "DELETE",
+    }),
+
+  // Environments
+  listEnvironments: () =>
+    fetchApi<{ environments: Environment[]; total: number }>("/api/v1/environments"),
+
+  getEnvironment: (id: string) =>
+    fetchApi<Environment>(`/api/v1/environments/${id}`),
+
+  createEnvironment: (req: CreateEnvironmentRequest) =>
+    fetchApi<Environment>("/api/v1/environments", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  updateEnvironment: (id: string, req: UpdateEnvironmentRequest) =>
+    fetchApi<Environment>(`/api/v1/environments/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(req),
+    }),
+
+  deleteEnvironment: (id: string) =>
+    fetchApi<{ status: string }>(`/api/v1/environments/${id}`, {
+      method: "DELETE",
+    }),
 
   // Custom request
   customRequest: async (

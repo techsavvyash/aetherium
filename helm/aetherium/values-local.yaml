@@ -15,7 +15,7 @@
 
 global:
   environment: development
-  imageRegistry: ""  # Use local images
+  imageRegistry: ""  # Don't set global registry - subcharts handle their own
   imagePullPolicy: IfNotPresent
 
 # API Gateway - minimal resources
@@ -23,8 +23,9 @@ apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: aetherium/api-gateway
+    repository: localhost:5000/aetherium/api-gateway
     tag: dev
+    pullPolicy: Always
   service:
     type: NodePort
     port: 8080
@@ -54,8 +55,9 @@ worker:
   kind: Deployment  # Use Deployment for local (single node)
   replicaCount: 1
   image:
-    repository: aetherium/worker
+    repository: localhost:5000/aetherium/worker
     tag: dev
+    pullPolicy: Always
   # For local testing, we assume the node has KVM
   nodeSelector: {}
   tolerations: []

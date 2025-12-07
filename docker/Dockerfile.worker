@@ -38,6 +38,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /build/bin/worker \
     ./cmd/worker
 
+# Build fc-agent (static binary for rootfs)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /build/bin/fc-agent \
+    ./cmd/fc-agent
+
 # =============================================================================
 # Stage 2: Minimal Runtime
 # =============================================================================
@@ -56,8 +62,9 @@ RUN apk add --no-cache \
 # Create required directories
 RUN mkdir -p /etc/aetherium /var/log/aetherium
 
-# Copy worker binary only (Firecracker is on the host)
+# Copy worker binary and fc-agent (for rootfs installation)
 COPY --from=builder /build/bin/worker /usr/local/bin/worker
+COPY --from=builder /build/bin/fc-agent /usr/local/bin/fc-agent
 
 # Copy entrypoint script
 COPY docker/scripts/worker-entrypoint.sh /usr/local/bin/entrypoint.sh
