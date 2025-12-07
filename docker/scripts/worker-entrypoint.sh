@@ -95,11 +95,53 @@ setup_network() {
     # Enable IP forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward || true
 
-    # Setup NAT for VM internet access
-    iptables -t nat -C POSTROUTING -s 172.16.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 172.16.0.0/24 -o eth0 -j MASQUERADE || true
+    # Detect default network interface (not hardcoded eth0)
+    DEFAULT_IFACE=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+    if [ -z "$DEFAULT_IFACE" ]; then
+        warn "Could not detect default interface, trying common names..."
+        for iface in eth0 enp0s20f0u4u4 wlan0; do
+            if ip link show "$iface" >/dev/null 2>&1; then
+                DEFAULT_IFACE="$iface"
+                break
+            fi
+        done
+    fi
 
-    success "Network setup complete"
+    if [ -z "$DEFAULT_IFACE" ]; then
+        warn "No default interface found, NAT may not work"
+        DEFAULT_IFACE="eth0"
+    fi
+
+    log "Using interface $DEFAULT_IFACE for NAT"
+
+    # Setup NAT for VM internet access using BOTH iptables (nft) and iptables-legacy
+    # This ensures compatibility with hosts using either backend
+
+    # iptables (nft) rules
+    log "Setting up iptables (nft) rules..."
+    iptables -t nat -C POSTROUTING -s 172.16.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.16.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE || true
+
+    # FORWARD rules for bridge traffic (both directions)
+    iptables -C FORWARD -i aetherium0 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i aetherium0 -j ACCEPT || true
+    iptables -C FORWARD -o aetherium0 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -o aetherium0 -j ACCEPT || true
+
+    # iptables-legacy rules (for hosts using legacy backend)
+    if command -v iptables-legacy >/dev/null 2>&1; then
+        log "Setting up iptables-legacy rules..."
+        iptables-legacy -t nat -C POSTROUTING -s 172.16.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+            iptables-legacy -t nat -A POSTROUTING -s 172.16.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE || true
+
+        # FORWARD rules for bridge traffic (both directions)
+        iptables-legacy -C FORWARD -i aetherium0 -j ACCEPT 2>/dev/null || \
+            iptables-legacy -A FORWARD -i aetherium0 -j ACCEPT || true
+        iptables-legacy -C FORWARD -o aetherium0 -j ACCEPT 2>/dev/null || \
+            iptables-legacy -A FORWARD -o aetherium0 -j ACCEPT || true
+    fi
+
+    success "Network setup complete (interface: $DEFAULT_IFACE)"
 }
 
 # =============================================================================

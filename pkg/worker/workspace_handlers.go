@@ -120,6 +120,45 @@ func (w *Worker) HandleWorkspaceCreate(ctx context.Context, task *queue.Task) (*
 		}, nil
 	}
 
+	// ✅ IMPORTANT: Store VM in database FIRST (before SetVMID) to satisfy foreign key constraint
+	// The workspaces.vm_id column has a foreign key to vms.id, so VM must exist first
+	vmUUID, _ := uuid.Parse(vm.ID)
+	kernelPath := vmConfig.KernelPath
+	rootfsPath := vmConfig.RootFSPath
+	socketPath := vmConfig.SocketPath
+
+	var workerID *string
+	if w.workerInfo != nil {
+		workerID = &w.workerInfo.ID
+	}
+
+	dbVM := &storage.VM{
+		ID:           vmUUID,
+		Name:         fmt.Sprintf("workspace-%s", payload.Name),
+		Orchestrator: "firecracker",
+		Status:       string(vm.Status),
+		KernelPath:   &kernelPath,
+		RootFSPath:   &rootfsPath,
+		SocketPath:   &socketPath,
+		VCPUCount:    &payload.VCPUs,
+		MemoryMB:     &payload.MemoryMB,
+		WorkerID:     workerID,
+		CreatedAt:    time.Now(),
+		Metadata: map[string]interface{}{
+			"workspace_id": workspaceID.String(),
+		},
+	}
+
+	if err := w.store.VMs().Create(ctx, dbVM); err != nil {
+		log.Printf("Warning: Failed to store VM in database: %v", err)
+		// Don't fail here - VM is running, we should continue
+	}
+
+	// Now we can safely link the VM to the workspace (foreign key constraint satisfied)
+	if err := w.store.Workspaces().SetVMID(ctx, workspaceID, vmUUID); err != nil {
+		log.Printf("Warning: Failed to link VM to workspace: %v", err)
+	}
+
 	// ✅ SECURITY: Inject secrets at boot time via vsock (in-memory only, never filesystem)
 	if w.workspaceService != nil {
 		secrets, err := w.getWorkspaceSecrets(ctx, workspaceID)
@@ -189,12 +228,6 @@ func (w *Worker) HandleWorkspaceCreate(ctx context.Context, task *queue.Task) (*
 		log.Printf("✓ All tools installed successfully in workspace VM %s", vm.ID)
 	}
 
-	// Link VM to workspace
-	vmUUID, _ := uuid.Parse(vm.ID)
-	if err := w.store.Workspaces().SetVMID(ctx, workspaceID, vmUUID); err != nil {
-		log.Printf("Warning: Failed to link VM to workspace: %v", err)
-	}
-
 	// Execute prep steps
 	log.Printf("Executing preparation steps for workspace %s...", workspaceID)
 	if err := w.executePrepSteps(ctx, workspaceID, vm.ID); err != nil {
@@ -210,37 +243,6 @@ func (w *Worker) HandleWorkspaceCreate(ctx context.Context, task *queue.Task) (*
 	}
 	w.tasksProcessed++
 	w.mu.Unlock()
-
-	// Store VM in database
-	kernelPath := vmConfig.KernelPath
-	rootfsPath := vmConfig.RootFSPath
-	socketPath := vmConfig.SocketPath
-
-	var workerID *string
-	if w.workerInfo != nil {
-		workerID = &w.workerInfo.ID
-	}
-
-	dbVM := &storage.VM{
-		ID:           vmUUID,
-		Name:         fmt.Sprintf("workspace-%s", payload.Name),
-		Orchestrator: "firecracker",
-		Status:       string(vm.Status),
-		KernelPath:   &kernelPath,
-		RootFSPath:   &rootfsPath,
-		SocketPath:   &socketPath,
-		VCPUCount:    &payload.VCPUs,
-		MemoryMB:     &payload.MemoryMB,
-		WorkerID:     workerID,
-		CreatedAt:    time.Now(),
-		Metadata: map[string]interface{}{
-			"workspace_id": workspaceID.String(),
-		},
-	}
-
-	if err := w.store.VMs().Create(ctx, dbVM); err != nil {
-		log.Printf("Warning: Failed to store VM in database: %v", err)
-	}
 
 	// Mark workspace as ready
 	if err := w.store.Workspaces().SetReady(ctx, workspaceID); err != nil {
@@ -681,19 +683,60 @@ func (w *Worker) HandlePromptExecute(ctx context.Context, task *queue.Task) (*qu
 		workingDir = *promptTask.WorkingDirectory
 	}
 
-	// Create a script that changes to the working directory and runs the AI assistant
-	var aiCmd string
+	// ⚠️ SECURITY: Claude Code cannot run with --dangerously-skip-permissions as root
+	// We need to create a non-root user 'aether' and run Claude as that user
+	// This script:
+	// 1. Creates 'aether' user if it doesn't exist
+	// 2. Gives aether user ownership of the working directory
+	// 3. Sources environment variables from /run/secrets/env (if exists) and /root/.bashrc
+	// 4. Runs Claude as the aether user
+
+	// Build the inner command to run as aether user
+	var innerCmd string
 	switch workspace.AIAssistant {
 	case "claude-code":
-		// Claude Code takes prompt as input
-		aiCmd = fmt.Sprintf("cd %s && claude-code --dangerously-skip-permissions '%s'", workingDir, escapeShellArg(promptTask.Prompt))
+		// Claude Code CLI - binary is named 'claude' (from @anthropic-ai/claude-code package)
+		innerCmd = fmt.Sprintf("cd %s && claude --dangerously-skip-permissions -p '%s'", workingDir, escapeShellArg(promptTask.Prompt))
 	case "ampcode", "amp":
 		// Ampcode CLI
-		aiCmd = fmt.Sprintf("cd %s && amp '%s'", workingDir, escapeShellArg(promptTask.Prompt))
+		innerCmd = fmt.Sprintf("cd %s && amp '%s'", workingDir, escapeShellArg(promptTask.Prompt))
 	default:
-		// Default to claude-code
-		aiCmd = fmt.Sprintf("cd %s && claude-code --dangerously-skip-permissions '%s'", workingDir, escapeShellArg(promptTask.Prompt))
+		// Default to claude-code (binary named 'claude')
+		innerCmd = fmt.Sprintf("cd %s && claude --dangerously-skip-permissions -p '%s'", workingDir, escapeShellArg(promptTask.Prompt))
 	}
+
+	// Wrap in non-root user execution
+	// The script creates user, sets up permissions, sources env vars, and runs command
+	aiCmd := fmt.Sprintf(`
+# Create aether user if not exists
+id aether >/dev/null 2>&1 || useradd -m aether
+
+# Create working directory if it doesn't exist
+mkdir -p %s
+
+# Give aether ownership of working directory
+chown -R aether:aether %s 2>/dev/null || true
+
+# Copy any secrets from root to aether's environment
+if [ -f /run/secrets/env ]; then
+    cp /run/secrets/env /home/aether/.secrets_env
+    chown aether:aether /home/aether/.secrets_env
+fi
+
+# Copy root's bashrc env vars to aether (for ANTHROPIC_API_KEY etc)
+grep "^export " /root/.bashrc >> /home/aether/.bashrc 2>/dev/null || true
+chown aether:aether /home/aether/.bashrc
+
+# Run as aether user with environment sourced
+su - aether -c '
+    # Source secrets if available
+    [ -f ~/.secrets_env ] && source ~/.secrets_env
+    # Source bashrc for env vars
+    source ~/.bashrc 2>/dev/null || true
+    # Run the actual command
+    %s
+'
+`, workingDir, workingDir, escapeShellArg(innerCmd))
 
 	cmd = &vmm.Command{
 		Cmd:  "bash",
@@ -778,6 +821,47 @@ func (w *Worker) spawnVMFromEnvironment(ctx context.Context, workspace *storage.
 		return nil, fmt.Errorf("failed to start VM: %w", err)
 	}
 
+	// ✅ IMPORTANT: Store VM in database FIRST (before SetVMID) to satisfy foreign key constraint
+	// The workspaces.vm_id column has a foreign key to vms.id, so VM must exist first
+	vmUUID, _ := uuid.Parse(vm.ID)
+	kernelPath := vmConfig.KernelPath
+	rootfsPath := vmConfig.RootFSPath
+	socketPath := vmConfig.SocketPath
+
+	var workerID *string
+	if w.workerInfo != nil {
+		workerID = &w.workerInfo.ID
+	}
+
+	dbVM := &storage.VM{
+		ID:           vmUUID,
+		Name:         fmt.Sprintf("env-%s-ws-%s", env.Name, workspace.Name),
+		Orchestrator: "firecracker",
+		Status:       string(vm.Status),
+		KernelPath:   &kernelPath,
+		RootFSPath:   &rootfsPath,
+		SocketPath:   &socketPath,
+		VCPUCount:    &env.VCPUs,
+		MemoryMB:     &env.MemoryMB,
+		WorkerID:     workerID,
+		CreatedAt:    time.Now(),
+		Metadata: map[string]interface{}{
+			"workspace_id":   workspace.ID.String(),
+			"environment_id": env.ID.String(),
+			"on_demand":      true,
+		},
+	}
+
+	if err := w.store.VMs().Create(ctx, dbVM); err != nil {
+		log.Printf("Warning: Failed to store VM in database: %v", err)
+		// Don't fail here - VM is running, we should continue
+	}
+
+	// Now we can safely link the VM to the workspace (foreign key constraint satisfied)
+	if err := w.store.Workspaces().SetVMID(ctx, workspace.ID, vmUUID); err != nil {
+		log.Printf("Warning: Failed to link VM to workspace: %v", err)
+	}
+
 	// Wait for agent to be ready
 	time.Sleep(5 * time.Second)
 
@@ -817,12 +901,6 @@ func (w *Worker) spawnVMFromEnvironment(ctx context.Context, workspace *storage.
 		log.Printf("✓ All tools installed successfully in VM %s", vm.ID)
 	}
 
-	// Link VM to workspace
-	vmUUID, _ := uuid.Parse(vm.ID)
-	if err := w.store.Workspaces().SetVMID(ctx, workspace.ID, vmUUID); err != nil {
-		log.Printf("Warning: Failed to link VM to workspace: %v", err)
-	}
-
 	// Track VM resources
 	w.mu.Lock()
 	w.runningVMs[vm.ID] = &vmResourceUsage{
@@ -831,39 +909,6 @@ func (w *Worker) spawnVMFromEnvironment(ctx context.Context, workspace *storage.
 	}
 	w.tasksProcessed++
 	w.mu.Unlock()
-
-	// Store VM in database
-	kernelPath := vmConfig.KernelPath
-	rootfsPath := vmConfig.RootFSPath
-	socketPath := vmConfig.SocketPath
-
-	var workerID *string
-	if w.workerInfo != nil {
-		workerID = &w.workerInfo.ID
-	}
-
-	dbVM := &storage.VM{
-		ID:           vmUUID,
-		Name:         fmt.Sprintf("env-%s-ws-%s", env.Name, workspace.Name),
-		Orchestrator: "firecracker",
-		Status:       string(vm.Status),
-		KernelPath:   &kernelPath,
-		RootFSPath:   &rootfsPath,
-		SocketPath:   &socketPath,
-		VCPUCount:    &env.VCPUs,
-		MemoryMB:     &env.MemoryMB,
-		WorkerID:     workerID,
-		CreatedAt:    time.Now(),
-		Metadata: map[string]interface{}{
-			"workspace_id":   workspace.ID.String(),
-			"environment_id": env.ID.String(),
-			"on_demand":      true,
-		},
-	}
-
-	if err := w.store.VMs().Create(ctx, dbVM); err != nil {
-		log.Printf("Warning: Failed to store VM in database: %v", err)
-	}
 
 	// Update worker resources in database
 	if w.workerInfo != nil {

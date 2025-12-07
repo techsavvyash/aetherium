@@ -50,6 +50,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 FROM alpine:3.19
 
 # Minimal dependencies - network tools for TAP/bridge management
+# Note: iptables-legacy is needed because some hosts use legacy iptables
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
@@ -57,6 +58,7 @@ RUN apk add --no-cache \
     jq \
     iproute2 \
     iptables \
+    iptables-legacy \
     bridge-utils
 
 # Create required directories

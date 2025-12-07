@@ -14,9 +14,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PromptInput } from "@/components/prompt-input";
+import { PromptList } from "@/components/prompt-result";
+import { TerminalView, TextTerminal } from "@/components/terminal-view";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tabs,
   TabsContent,
@@ -55,7 +58,6 @@ import {
   Send,
   Key,
   GitBranch,
-  Terminal,
   CheckCircle2,
   XCircle,
   Clock,
@@ -65,6 +67,7 @@ import {
   Trash2,
   FolderCode,
   Plus,
+  Terminal,
 } from "lucide-react";
 
 function getStatusBadge(status: string) {
@@ -94,21 +97,6 @@ function getPrepStepStatusIcon(status: string) {
       return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
     default:
       return <Clock className="h-4 w-4 text-muted-foreground" />;
-  }
-}
-
-function getPromptStatusBadge(status: string) {
-  switch (status.toLowerCase()) {
-    case "completed":
-      return <Badge className="bg-green-500">Completed</Badge>;
-    case "running":
-      return <Badge className="bg-blue-500">Running</Badge>;
-    case "pending":
-      return <Badge className="bg-yellow-500">Pending</Badge>;
-    case "failed":
-      return <Badge variant="destructive">Failed</Badge>;
-    default:
-      return <Badge variant="outline">{status}</Badge>;
   }
 }
 
@@ -147,13 +135,6 @@ export default function WorkspaceDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Prompt submission state
-  const [promptText, setPromptText] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [workingDirectory, setWorkingDirectory] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
   // Secret addition state
   const [showAddSecret, setShowAddSecret] = useState(false);
   const [newSecretName, setNewSecretName] = useState("");
@@ -161,16 +142,12 @@ export default function WorkspaceDetailPage() {
   const [newSecretType, setNewSecretType] = useState("api_key");
   const [addingSecret, setAddingSecret] = useState(false);
 
-  // Expanded prompt for viewing details
-  const [expandedPromptId, setExpandedPromptId] = useState<string | null>(null);
-
   const fetchWorkspace = useCallback(async () => {
     const result = await api.getWorkspace(workspaceId);
     if (result.error) {
       setError(result.error);
     } else if (result.data) {
       setWorkspace(result.data);
-      setWorkingDirectory(result.data.working_directory || "/workspace");
       setError(null);
     }
   }, [workspaceId]);
@@ -204,33 +181,40 @@ export default function WorkspaceDetailPage() {
   }, [fetchAll]);
 
   // Auto-refresh prompts when workspace is ready
+  // Poll faster (2s) when there are running/pending prompts, slower (5s) otherwise
   useEffect(() => {
     if (workspace?.status === "ready") {
+      const hasActivePrompts = prompts.some(
+        (p) => p.status === "running" || p.status === "pending"
+      );
+      const pollInterval = hasActivePrompts ? 2000 : 5000;
+
       const interval = setInterval(() => {
         fetchPrompts();
-      }, 5000);
+      }, pollInterval);
       return () => clearInterval(interval);
     }
-  }, [workspace?.status, fetchPrompts]);
+  }, [workspace?.status, prompts, fetchPrompts]);
 
-  const handleSubmitPrompt = async () => {
-    if (!promptText.trim()) return;
-
-    setSubmitting(true);
+  const handleSubmitPrompt = useCallback(async (
+    prompt: string,
+    systemPrompt?: string,
+    workingDirectory?: string
+  ) => {
     const result = await api.submitPrompt(workspaceId, {
-      prompt: promptText,
-      system_prompt: systemPrompt || undefined,
-      working_directory: workingDirectory || undefined,
+      prompt,
+      system_prompt: systemPrompt,
+      working_directory: workingDirectory,
     });
 
     if (result.error) {
       setError(result.error);
+      throw new Error(result.error);
     } else {
-      setPromptText("");
+      setError(null);
       fetchPrompts();
     }
-    setSubmitting(false);
-  };
+  }, [workspaceId, fetchPrompts]);
 
   const handleAddSecret = async () => {
     if (!newSecretName.trim() || !newSecretValue.trim()) return;
@@ -436,6 +420,10 @@ export default function WorkspaceDetailPage() {
       <Tabs defaultValue="prompts" className="space-y-4">
         <TabsList>
           <TabsTrigger value="prompts">Prompts</TabsTrigger>
+          <TabsTrigger value="terminal">
+            <Terminal className="h-4 w-4 mr-1" />
+            Terminal
+          </TabsTrigger>
           <TabsTrigger value="preparation">Preparation Steps</TabsTrigger>
           <TabsTrigger value="secrets">Secrets ({secrets.length})</TabsTrigger>
         </TabsList>
@@ -455,69 +443,13 @@ export default function WorkspaceDetailPage() {
                   : "Workspace is not ready yet. Please wait for preparation to complete."}
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="prompt">Prompt</Label>
-                <Textarea
-                  id="prompt"
-                  placeholder="Enter your prompt here..."
-                  value={promptText}
-                  onChange={(e) => setPromptText(e.target.value)}
-                  disabled={!isReady || submitting}
-                  className="min-h-[120px] mt-1"
-                />
-              </div>
-
-              <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
-                <CollapsibleTrigger asChild>
-                  <Button variant="ghost" size="sm" className="gap-2">
-                    {showAdvanced ? (
-                      <ChevronDown className="h-4 w-4" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4" />
-                    )}
-                    Advanced Options
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-4 pt-4">
-                  <div>
-                    <Label htmlFor="systemPrompt">System Prompt (Optional)</Label>
-                    <Textarea
-                      id="systemPrompt"
-                      placeholder="Enter a system prompt..."
-                      value={systemPrompt}
-                      onChange={(e) => setSystemPrompt(e.target.value)}
-                      disabled={!isReady || submitting}
-                      className="min-h-[80px] mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="workingDir">Working Directory</Label>
-                    <Input
-                      id="workingDir"
-                      placeholder="/workspace"
-                      value={workingDirectory}
-                      onChange={(e) => setWorkingDirectory(e.target.value)}
-                      disabled={!isReady || submitting}
-                      className="mt-1"
-                    />
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-
-              <div className="flex justify-end">
-                <Button
-                  onClick={handleSubmitPrompt}
-                  disabled={!isReady || submitting || !promptText.trim()}
-                >
-                  {submitting ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4 mr-2" />
-                  )}
-                  {submitting ? "Submitting..." : "Submit Prompt"}
-                </Button>
-              </div>
+            <CardContent>
+              <PromptInput
+                onSubmit={handleSubmitPrompt}
+                disabled={!isReady}
+                defaultWorkingDirectory={workspace.working_directory || "/workspace"}
+                aiAssistantName={aiInfo.name}
+              />
             </CardContent>
           </Card>
 
@@ -530,114 +462,108 @@ export default function WorkspaceDetailPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {prompts.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Terminal className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No prompts submitted yet</p>
-                  <p className="text-sm mt-1">
-                    Submit your first prompt to start working with {aiInfo.name}
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {prompts.map((prompt) => (
-                    <Collapsible
-                      key={prompt.id}
-                      open={expandedPromptId === prompt.id}
-                      onOpenChange={(open) =>
-                        setExpandedPromptId(open ? prompt.id : null)
-                      }
-                    >
-                      <div className="border rounded-lg p-4">
-                        <CollapsibleTrigger asChild>
-                          <div className="flex items-start justify-between cursor-pointer">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                {getPromptStatusBadge(prompt.status)}
-                                {prompt.exit_code !== undefined && (
-                                  <Badge
-                                    variant={
-                                      prompt.exit_code === 0
-                                        ? "outline"
-                                        : "destructive"
-                                    }
-                                  >
-                                    Exit: {prompt.exit_code}
-                                  </Badge>
-                                )}
-                                <span className="text-xs text-muted-foreground">
-                                  {new Date(prompt.created_at).toLocaleString()}
-                                </span>
-                                {prompt.duration_ms && (
-                                  <span className="text-xs text-muted-foreground">
-                                    ({(prompt.duration_ms / 1000).toFixed(1)}s)
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-sm line-clamp-2">
-                                {prompt.prompt}
-                              </p>
-                            </div>
-                            <Button variant="ghost" size="sm">
-                              {expandedPromptId === prompt.id ? (
-                                <ChevronDown className="h-4 w-4" />
-                              ) : (
-                                <ChevronRight className="h-4 w-4" />
-                              )}
-                            </Button>
-                          </div>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="pt-4 space-y-4">
-                          <div>
-                            <Label className="text-xs">Full Prompt</Label>
-                            <pre className="mt-1 p-3 bg-muted rounded text-sm whitespace-pre-wrap overflow-x-auto">
-                              {prompt.prompt}
-                            </pre>
-                          </div>
-                          {prompt.system_prompt && (
-                            <div>
-                              <Label className="text-xs">System Prompt</Label>
-                              <pre className="mt-1 p-3 bg-muted rounded text-sm whitespace-pre-wrap overflow-x-auto">
-                                {prompt.system_prompt}
-                              </pre>
-                            </div>
+              <PromptList
+                prompts={prompts}
+                aiAssistantName={aiInfo.name}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Terminal Tab */}
+        <TabsContent value="terminal" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Terminal className="h-5 w-5" />
+                Terminal Output
+              </CardTitle>
+              <CardDescription>
+                {prompts.length > 0
+                  ? `Showing output from the most recent prompt execution`
+                  : `No prompts executed yet. Submit a prompt to see terminal output.`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                // Find the most recent prompt with output (prefer running, then completed)
+                const runningPrompt = prompts.find(
+                  (p) => p.status.toLowerCase() === "running"
+                );
+                const completedPrompt = prompts.find(
+                  (p) =>
+                    p.status.toLowerCase() === "completed" ||
+                    p.status.toLowerCase() === "failed"
+                );
+                const activePrompt = runningPrompt || completedPrompt;
+
+                if (!activePrompt) {
+                  return (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <Terminal className="h-16 w-16 mx-auto mb-4 opacity-30" />
+                      <p className="text-lg">No output to display</p>
+                      <p className="text-sm mt-2">
+                        Submit a prompt from the Prompts tab to see terminal output here
+                      </p>
+                    </div>
+                  );
+                }
+
+                // Combine stdout and stderr for display
+                const output = [
+                  activePrompt.stdout,
+                  activePrompt.stderr ? `\n\x1b[31m${activePrompt.stderr}\x1b[0m` : "",
+                  activePrompt.error ? `\n\x1b[31mError: ${activePrompt.error}\x1b[0m` : "",
+                ]
+                  .filter(Boolean)
+                  .join("");
+
+                const isRunning = activePrompt.status.toLowerCase() === "running";
+
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {isRunning ? (
+                          <Badge className="bg-blue-500">
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Running
+                          </Badge>
+                        ) : activePrompt.status.toLowerCase() === "completed" ? (
+                          <Badge className="bg-green-500">Completed</Badge>
+                        ) : (
+                          <Badge variant="destructive">Failed</Badge>
+                        )}
+                        <span className="text-sm text-muted-foreground">
+                          {new Date(activePrompt.created_at).toLocaleString()}
+                        </span>
+                        {activePrompt.exit_code !== undefined &&
+                          activePrompt.exit_code !== null && (
+                            <Badge
+                              variant={
+                                activePrompt.exit_code === 0 ? "outline" : "destructive"
+                              }
+                              className="font-mono"
+                            >
+                              Exit: {activePrompt.exit_code}
+                            </Badge>
                           )}
-                          {prompt.stdout && (
-                            <div>
-                              <Label className="text-xs text-green-600">
-                                Output (stdout)
-                              </Label>
-                              <pre className="mt-1 p-3 bg-green-50 dark:bg-green-950 rounded text-sm whitespace-pre-wrap overflow-x-auto max-h-96">
-                                {prompt.stdout}
-                              </pre>
-                            </div>
-                          )}
-                          {prompt.stderr && (
-                            <div>
-                              <Label className="text-xs text-red-600">
-                                Errors (stderr)
-                              </Label>
-                              <pre className="mt-1 p-3 bg-red-50 dark:bg-red-950 rounded text-sm whitespace-pre-wrap overflow-x-auto max-h-96">
-                                {prompt.stderr}
-                              </pre>
-                            </div>
-                          )}
-                          {prompt.error && (
-                            <div>
-                              <Label className="text-xs text-red-600">
-                                Error
-                              </Label>
-                              <pre className="mt-1 p-3 bg-red-50 dark:bg-red-950 rounded text-sm whitespace-pre-wrap overflow-x-auto">
-                                {prompt.error}
-                              </pre>
-                            </div>
-                          )}
-                        </CollapsibleContent>
                       </div>
-                    </Collapsible>
-                  ))}
-                </div>
-              )}
+                      <div className="text-sm text-muted-foreground font-mono truncate max-w-md">
+                        {activePrompt.prompt.substring(0, 50)}
+                        {activePrompt.prompt.length > 50 ? "..." : ""}
+                      </div>
+                    </div>
+
+                    <TerminalView
+                      output={output || (isRunning ? "Waiting for output..." : "No output")}
+                      height="500px"
+                      title={`${aiInfo.name} Output`}
+                      readOnly={true}
+                    />
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>
