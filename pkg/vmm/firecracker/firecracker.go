@@ -1,9 +1,12 @@
 package firecracker
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +17,7 @@ import (
 	"github.com/aetherium/aetherium/pkg/vmm"
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
+	"github.com/mdlayher/vsock"
 )
 
 // FirecrackerOrchestrator implements vmm.VMOrchestrator using the official Firecracker SDK
@@ -430,6 +434,117 @@ func findFirecrackerBinary() string {
 	}
 
 	return ""
+}
+
+// ProvideSecretsOnBoot establishes a vsock connection and sends secrets to the VM on boot
+// This method listens for a reverse connection from the VM's fc-agent during boot
+func (f *FirecrackerOrchestrator) ProvideSecretsOnBoot(ctx context.Context, vmID string, secrets map[string]string) error {
+	if len(secrets) == 0 {
+		log.Printf("No secrets to provide for VM %s", vmID)
+		return nil
+	}
+
+	log.Printf("Preparing to provide %d secrets to VM %s", len(secrets), vmID)
+
+	// Get VM handle to verify it exists
+	_, exists := f.vms[vmID]
+	if !exists {
+		return fmt.Errorf("VM %s not found", vmID)
+	}
+
+	// Create vsock listener on host for VM to connect to
+	// The VM will dial host CID 2 (always), port 9998
+	// Use the Firecracker SDK's vsock device to accept connections
+	// We need to listen on the host side for the VM to dial
+	// The vsock.Listen function creates a listener that the guest can connect to
+	listener, err := vsock.Listen(9998, &vsock.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to create vsock listener: %w", err)
+	}
+	defer listener.Close()
+
+	log.Printf("Vsock listener created on port 9998, waiting for VM %s to connect...", vmID)
+
+	// Accept connection with timeout
+	acceptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Accept in goroutine to support timeout
+	connChan := make(chan net.Conn, 1)
+	errChan := make(chan error, 1)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		connChan <- conn
+	}()
+
+	var conn net.Conn
+	select {
+	case conn = <-connChan:
+		defer conn.Close()
+	case err := <-errChan:
+		return fmt.Errorf("failed to accept secret connection: %w", err)
+	case <-acceptCtx.Done():
+		return fmt.Errorf("timeout waiting for VM to connect for secrets")
+	}
+
+	log.Printf("VM %s connected to fetch secrets", vmID)
+
+	// Read GET_SECRETS request from VM
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read secret request: %w", err)
+	}
+
+	// Parse request
+	type Request struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload,omitempty"`
+	}
+
+	var request Request
+	if err := json.Unmarshal([]byte(line), &request); err != nil {
+		return fmt.Errorf("failed to parse secret request: %w", err)
+	}
+
+	if request.Type != "get_secrets" {
+		return fmt.Errorf("unexpected request type: %s (expected get_secrets)", request.Type)
+	}
+
+	// Prepare response with secrets
+	type Response struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload,omitempty"`
+		Error   string          `json:"error,omitempty"`
+	}
+
+	secretsPayload, err := json.Marshal(secrets)
+	if err != nil {
+		return fmt.Errorf("failed to marshal secrets: %w", err)
+	}
+
+	response := Response{
+		Type:    "success",
+		Payload: secretsPayload,
+	}
+
+	// Send response
+	data, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	if _, err := conn.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("failed to send secrets: %w", err)
+	}
+
+	log.Printf("✓ Successfully provided %d secrets to VM %s (in-memory only)", len(secrets), vmID)
+	return nil
 }
 
 // Ensure FirecrackerOrchestrator implements vmm.VMOrchestrator

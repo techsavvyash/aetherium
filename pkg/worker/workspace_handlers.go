@@ -120,8 +120,31 @@ func (w *Worker) HandleWorkspaceCreate(ctx context.Context, task *queue.Task) (*
 		}, nil
 	}
 
-	// Wait for agent to be ready
-	time.Sleep(5 * time.Second)
+	// ✅ SECURITY: Inject secrets at boot time via vsock (in-memory only, never filesystem)
+	if w.workspaceService != nil {
+		secrets, err := w.getWorkspaceSecrets(ctx, workspaceID)
+		if err != nil {
+			log.Printf("Warning: Failed to get workspace secrets: %v", err)
+		} else if len(secrets) > 0 {
+			log.Printf("Providing %d secrets to VM %s via vsock (ephemeral, in-memory only)", len(secrets), vm.ID)
+
+			// Type assert to get Firecracker orchestrator for ProvideSecretsOnBoot
+			if fcOrch, ok := w.orchestrator.(interface {
+				ProvideSecretsOnBoot(context.Context, string, map[string]string) error
+			}); ok {
+				if err := fcOrch.ProvideSecretsOnBoot(ctx, vm.ID, secrets); err != nil {
+					log.Printf("Warning: Failed to provide secrets to VM: %v", err)
+					// Don't fail workspace creation if secret injection fails
+					// The workspace will still be usable, just without secrets
+				}
+			} else {
+				log.Printf("Warning: Orchestrator does not support secure secret injection")
+			}
+		}
+	}
+
+	// Wait for agent to be ready (including time for secret fetching)
+	time.Sleep(8 * time.Second)
 
 	// Install tools (default + AI assistant + additional)
 	log.Printf("Installing tools in workspace VM %s...", vm.ID)
@@ -377,7 +400,34 @@ func (w *Worker) executeScript(ctx context.Context, vmID string, config map[stri
 	return result, nil
 }
 
+// getWorkspaceSecrets retrieves and decrypts all secrets for a workspace
+func (w *Worker) getWorkspaceSecrets(ctx context.Context, workspaceID uuid.UUID) (map[string]string, error) {
+	secrets, err := w.store.Secrets().ListByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list secrets: %w", err)
+	}
+
+	if len(secrets) == 0 {
+		return make(map[string]string), nil
+	}
+
+	decryptedSecrets := make(map[string]string)
+	for _, secret := range secrets {
+		decryptedValue, err := w.workspaceService.GetDecryptedSecret(ctx, secret.ID)
+		if err != nil {
+			log.Printf("Warning: Failed to decrypt secret %s: %v", secret.Name, err)
+			continue
+		}
+		decryptedSecrets[secret.Name] = decryptedValue
+	}
+
+	return decryptedSecrets, nil
+}
+
 // executeEnvVar sets an environment variable
+// ⚠️ DEPRECATED: This function writes secrets to ~/.bashrc which is insecure
+// Secrets are now injected via vsock at boot time (in-memory only)
+// This function is kept for backward compatibility with non-secret env vars
 func (w *Worker) executeEnvVar(ctx context.Context, vmID string, workspaceID uuid.UUID, config map[string]interface{}) (*storage.PrepStepResult, error) {
 	key, _ := config["key"].(string)
 	value, _ := config["value"].(string)
@@ -388,21 +438,25 @@ func (w *Worker) executeEnvVar(ctx context.Context, vmID string, workspaceID uui
 		return nil, fmt.Errorf("env_var requires 'key' in config")
 	}
 
-	// If using a secret, retrieve its value
-	if secretName != "" && w.workspaceService != nil {
-		secretValue, err := w.workspaceService.GetDecryptedSecretByName(ctx, workspaceID, secretName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get secret %s: %w", secretName, err)
-		}
-		value = secretValue
+	// ⚠️ SECURITY: Block secret injection via this method
+	// Secrets are now injected securely via vsock at boot time (in-memory only)
+	if secretName != "" || isSecret {
+		log.Printf("⚠️  Skipping insecure env_var prep step for secret '%s' - secrets are now injected securely at VM boot via vsock (in-memory only)", key)
+		return &storage.PrepStepResult{
+			ExitCode: 0,
+			Stdout:   "Secret injection skipped - now handled securely at VM boot via vsock",
+			Stderr:   "",
+		}, nil
 	}
 
-	// Export the environment variable by adding to .bashrc
-	exportCmd := fmt.Sprintf("echo 'export %s=\"%s\"' >> ~/.bashrc", key, value)
-	if isSecret {
-		// For secrets, don't log the value
-		log.Printf("Setting secret environment variable: %s", key)
+	// Only allow non-secret environment variables
+	if value == "" {
+		return nil, fmt.Errorf("env_var requires 'value' in config for non-secret variables")
 	}
+
+	// Export the environment variable by adding to .bashrc (non-secrets only)
+	exportCmd := fmt.Sprintf("echo 'export %s=\"%s\"' >> ~/.bashrc", key, value)
+	log.Printf("Setting non-secret environment variable: %s", key)
 
 	cmd := &vmm.Command{
 		Cmd:  "bash",
