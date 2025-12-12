@@ -27,6 +27,10 @@ type VMOrchestrator interface {
 	// ExecuteCommand executes a command inside a VM
 	ExecuteCommand(ctx context.Context, vmID string, cmd *Command) (*ExecResult, error)
 
+	// ExecuteCommandStream executes a command inside a VM with streaming output
+	// The handler is called for each chunk of output as it becomes available
+	ExecuteCommandStream(ctx context.Context, vmID string, cmd *Command, handler StreamHandler) error
+
 	// DeleteVM destroys a VM and cleans up resources
 	DeleteVM(ctx context.Context, vmID string) error
 
@@ -50,6 +54,17 @@ type ExecResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 }
+
+// ExecStreamChunk represents a chunk of streaming command output
+type ExecStreamChunk struct {
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"` // nil until final chunk
+	Error    string `json:"error,omitempty"`
+}
+
+// StreamHandler is a callback function for handling streaming output chunks
+type StreamHandler func(chunk *ExecStreamChunk)
 
 // Config represents VMM configuration
 type Config struct {

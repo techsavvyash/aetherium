@@ -24,6 +24,9 @@ import (
 	"github.com/aetherium/aetherium/pkg/service"
 	"github.com/aetherium/aetherium/pkg/storage"
 	"github.com/aetherium/aetherium/pkg/storage/postgres"
+	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/pkg/vmm/firecracker"
+	"github.com/aetherium/aetherium/pkg/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -38,6 +41,8 @@ type Server struct {
 	integrations     *integrations.Registry
 	logger           *loki.LokiLogger
 	eventBus         *redis.RedisEventBus
+	orchestrator     vmm.VMOrchestrator
+	sessionManager   *websocket.SessionManager
 }
 
 func main() {
@@ -145,6 +150,33 @@ func main() {
 	}
 	log.Println("✓ Workspace service initialized")
 
+	// Initialize Firecracker orchestrator for WebSocket streaming
+	var orchestrator vmm.VMOrchestrator
+	firecrackerConfig := map[string]interface{}{
+		"kernel_path":       getEnv("FIRECRACKER_KERNEL", "/var/firecracker/vmlinux.bin"),
+		"rootfs_template":   getEnv("FIRECRACKER_ROOTFS", "/var/firecracker/rootfs.ext4"),
+		"socket_dir":        getEnv("FIRECRACKER_SOCKET_DIR", "/tmp"),
+		"default_vcpu":      getEnvInt("FIRECRACKER_DEFAULT_VCPU", 1),
+		"default_memory_mb": getEnvInt("FIRECRACKER_DEFAULT_MEMORY_MB", 512),
+	}
+
+	orchestrator, err = firecracker.NewFirecrackerOrchestrator(firecrackerConfig)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize Firecracker orchestrator: %v", err)
+		log.Println("  WebSocket streaming will not be available")
+		log.Println("  Set FIRECRACKER_KERNEL and FIRECRACKER_ROOTFS environment variables")
+		orchestrator = nil
+	} else {
+		log.Println("✓ Firecracker orchestrator initialized for WebSocket streaming")
+	}
+
+	// Initialize WebSocket session manager
+	var sessionManager *websocket.SessionManager
+	if orchestrator != nil {
+		sessionManager = websocket.NewSessionManager(store, orchestrator)
+		log.Println("✓ WebSocket session manager initialized")
+	}
+
 	// Initialize service discovery (optional)
 	var workerService *service.WorkerService
 	var consulRegistry discovery.ServiceRegistry
@@ -188,6 +220,8 @@ func main() {
 		integrations:     registry,
 		logger:           logger,
 		eventBus:         eventBus,
+		orchestrator:     orchestrator,
+		sessionManager:   sessionManager,
 	}
 
 	// Setup router
@@ -266,7 +300,7 @@ func main() {
 		r.Post("/workspaces/{id}/secrets", srv.addSecret)
 		r.Get("/workspaces/{id}/secrets", srv.listSecrets)
 		r.Delete("/workspaces/{id}/secrets/{secretId}", srv.deleteSecret)
-		r.Get("/workspaces/{id}/session", srv.workspaceSession) // WebSocket
+		r.Get("/workspaces/{id}/ws", srv.workspaceSession) // WebSocket
 
 		// Health
 		r.Get("/health", srv.health)
@@ -1044,9 +1078,22 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceSession(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement WebSocket session handler
-	// This will be implemented in pkg/websocket/session.go
-	respondError(w, http.StatusNotImplemented, "WebSocket sessions not yet implemented", nil)
+	// Check if session manager is available
+	if s.sessionManager == nil {
+		respondError(w, http.StatusServiceUnavailable, "WebSocket streaming not available (orchestrator not initialized)", nil)
+		return
+	}
+
+	// Parse workspace ID
+	idStr := chi.URLParam(r, "id")
+	workspaceID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid workspace ID", err)
+		return
+	}
+
+	// Handle WebSocket upgrade and session
+	s.sessionManager.HandleSession(w, r, workspaceID)
 }
 
 // Environment handlers

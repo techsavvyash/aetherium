@@ -25,6 +25,34 @@ type commandResponse struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// Streaming protocol types (matching fc-agent)
+type agentRequest struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type agentStreamResponse struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type agentStreamData struct {
+	Stdout string `json:"stdout,omitempty"`
+	Stderr string `json:"stderr,omitempty"`
+}
+
+type agentStreamExit struct {
+	ExitCode int    `json:"exit_code"`
+	Error    string `json:"error,omitempty"`
+}
+
+const (
+	responseTypeError      = "error"
+	responseTypeStreamData = "stream_data"
+	responseTypeStreamExit = "stream_exit"
+)
+
 const (
 	// Guest CID is what we configured in the VM
 	GuestCID = 3
@@ -206,5 +234,122 @@ func (f *FirecrackerOrchestrator) sendCommandAndWait(ctx context.Context, conn n
 		return nil, ctx.Err()
 	case <-time.After(30 * time.Second):
 		return nil, fmt.Errorf("command execution timeout")
+	}
+}
+
+// ExecuteCommandStream executes a command in a Firecracker VM with streaming output
+func (f *FirecrackerOrchestrator) ExecuteCommandStream(ctx context.Context, vmID string, cmd *vmm.Command, handler vmm.StreamHandler) error {
+	handle, exists := f.vms[vmID]
+	if !exists {
+		return fmt.Errorf("VM %s not found", vmID)
+	}
+
+	if handle.vm.Status != "RUNNING" {
+		return fmt.Errorf("VM %s is not running (status: %s)", vmID, handle.vm.Status)
+	}
+
+	// Try vsock first, then fall back to network
+	conn, vsockErr := f.connectViaVsock(ctx, handle, 5*time.Second)
+	if vsockErr != nil {
+		// Vsock failed - try TCP fallback
+		if handle.ipAddress != "" {
+			tcpConn, tcpErr := f.connectViaTCP(ctx, handle, 10*time.Second)
+			if tcpErr == nil {
+				defer tcpConn.Close()
+				return f.sendCommandAndStream(ctx, tcpConn, cmd, handler)
+			}
+			return fmt.Errorf("cannot connect to VM agent via vsock or TCP (streaming): vsock: %v, tcp: %v", vsockErr, tcpErr)
+		}
+		return fmt.Errorf("cannot connect to VM agent via vsock (streaming): %v", vsockErr)
+	}
+	defer conn.Close()
+
+	return f.sendCommandAndStream(ctx, conn, cmd, handler)
+}
+
+// sendCommandAndStream sends a streaming execute request and forwards output chunks to the handler
+func (f *FirecrackerOrchestrator) sendCommandAndStream(ctx context.Context, conn net.Conn, cmd *vmm.Command, handler vmm.StreamHandler) error {
+	// Build command request payload
+	cmdReq := commandRequest{
+		Cmd:  cmd.Cmd,
+		Args: cmd.Args,
+	}
+	if cmd.Env != nil {
+		for k, v := range cmd.Env {
+			cmdReq.Env = append(cmdReq.Env, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+
+	payload, err := json.Marshal(cmdReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal stream payload: %w", err)
+	}
+
+	// Build agent request with execute_stream type
+	areq := agentRequest{
+		Type:    "execute_stream",
+		Payload: payload,
+	}
+	reqBytes, err := json.Marshal(areq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal stream request: %w", err)
+	}
+
+	// Send request
+	if _, err := conn.Write(append(reqBytes, '\n')); err != nil {
+		return fmt.Errorf("failed to send stream command: %w", err)
+	}
+
+	// Read streaming responses
+	reader := bufio.NewReader(conn)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read stream response: %w", err)
+		}
+
+		var resp agentStreamResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			return fmt.Errorf("failed to parse stream response: %w", err)
+		}
+
+		switch resp.Type {
+		case responseTypeError:
+			// Agent returned an error (possibly unknown request type for old agents)
+			return fmt.Errorf("agent error: %s", resp.Error)
+
+		case responseTypeStreamData:
+			var data agentStreamData
+			if err := json.Unmarshal(resp.Payload, &data); err != nil {
+				return fmt.Errorf("failed to parse stream_data: %w", err)
+			}
+			if data.Stdout != "" {
+				handler(&vmm.ExecStreamChunk{Stdout: data.Stdout})
+			}
+			if data.Stderr != "" {
+				handler(&vmm.ExecStreamChunk{Stderr: data.Stderr})
+			}
+
+		case responseTypeStreamExit:
+			var exit agentStreamExit
+			if err := json.Unmarshal(resp.Payload, &exit); err != nil {
+				return fmt.Errorf("failed to parse stream_exit: %w", err)
+			}
+			exitCode := exit.ExitCode
+			handler(&vmm.ExecStreamChunk{
+				ExitCode: &exitCode,
+				Error:    exit.Error,
+			})
+			return nil
+
+		default:
+			// Ignore unknown types for forward compatibility
+		}
 	}
 }

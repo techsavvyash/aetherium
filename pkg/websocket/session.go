@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,7 @@ type MessageType string
 const (
 	MessageTypePrompt   MessageType = "prompt"
 	MessageTypeResponse MessageType = "response"
+	MessageTypeStream   MessageType = "stream" // Delta streaming chunks
 	MessageTypeError    MessageType = "error"
 	MessageTypeStatus   MessageType = "status"
 	MessageTypePing     MessageType = "ping"
@@ -79,6 +81,7 @@ type OutgoingMessage struct {
 	SessionID uuid.UUID   `json:"session_id,omitempty"`
 	MessageID uuid.UUID   `json:"message_id,omitempty"`
 	Content   string      `json:"content,omitempty"`
+	Chunk     string      `json:"chunk,omitempty"` // Delta content for streaming
 	ExitCode  *int        `json:"exit_code,omitempty"`
 	Error     string      `json:"error,omitempty"`
 	Timestamp time.Time   `json:"timestamp"`
@@ -296,45 +299,103 @@ func (s *Session) handlePrompt(workspace *storage.Workspace, incoming *IncomingM
 		Args: []string{"-c", aiCmd},
 	}
 
-	result, err := s.Manager.orchestrator.ExecuteCommand(ctx, vmID, cmd)
+	// Track accumulated output for streaming
+	var fullStdout strings.Builder
+	var fullStderr strings.Builder
+	var finalExit *int
+	var finalError string
 
-	var exitCode *int
-	var stdout, stderr string
+	// Stream handler for real-time output - sends DELTA chunks, not cumulative
+	streamHandler := func(chunk *vmm.ExecStreamChunk) {
+		// Build the delta chunk from stdout and stderr
+		deltaChunk := ""
+		if chunk.Stdout != "" {
+			fullStdout.WriteString(chunk.Stdout)
+			deltaChunk += chunk.Stdout
+		}
+		if chunk.Stderr != "" {
+			fullStderr.WriteString(chunk.Stderr)
+			deltaChunk += chunk.Stderr
+		}
 
+		// Send delta chunk for real-time streaming (not cumulative)
+		if deltaChunk != "" {
+			s.sendMessage(&OutgoingMessage{
+				Type:      MessageTypeStream,
+				MessageID: messageID,
+				Chunk:     deltaChunk, // Delta content only
+				Timestamp: time.Now(),
+			})
+		}
+
+		// Track exit code when command completes
+		if chunk.ExitCode != nil {
+			finalExit = chunk.ExitCode
+			finalError = chunk.Error
+		}
+	}
+
+	// Try streaming path first
+	err := s.Manager.orchestrator.ExecuteCommandStream(ctx, vmID, cmd, streamHandler)
 	if err != nil {
-		s.sendMessage(&OutgoingMessage{
-			Type:      MessageTypeError,
-			MessageID: messageID,
-			Error:     fmt.Sprintf("Failed to execute command: %v", err),
-			Timestamp: time.Now(),
-		})
-	} else {
-		exitCode = &result.ExitCode
-		stdout = result.Stdout
-		stderr = result.Stderr
+		log.Printf("Streaming exec failed, falling back to non-streaming: %v", err)
 
-		// Send response
-		content := stdout
-		if stderr != "" && result.ExitCode != 0 {
-			content += "\n\nStderr:\n" + stderr
+		// Fallback to old synchronous behavior
+		result, err2 := s.Manager.orchestrator.ExecuteCommand(ctx, vmID, cmd)
+		if err2 != nil {
+			s.sendMessage(&OutgoingMessage{
+				Type:      MessageTypeError,
+				MessageID: messageID,
+				Error:     fmt.Sprintf("Failed to execute command: %v", err2),
+				Timestamp: time.Now(),
+			})
+			finalError = err2.Error()
+		} else {
+			finalExit = &result.ExitCode
+			fullStdout.WriteString(result.Stdout)
+			fullStderr.WriteString(result.Stderr)
+
+			content := result.Stdout
+			if result.Stderr != "" && result.ExitCode != 0 {
+				content += "\n\nStderr:\n" + result.Stderr
+			}
+
+			s.sendMessage(&OutgoingMessage{
+				Type:      MessageTypeResponse,
+				MessageID: messageID,
+				Content:   content,
+				ExitCode:  finalExit,
+				Timestamp: time.Now(),
+			})
+		}
+	} else {
+		// Streaming success: send final message with exit code and stderr appended
+		if finalExit == nil {
+			code := 0
+			finalExit = &code
+		}
+
+		content := fullStdout.String()
+		if serr := fullStderr.String(); serr != "" && *finalExit != 0 {
+			content += "\n\nStderr:\n" + serr
 		}
 
 		s.sendMessage(&OutgoingMessage{
 			Type:      MessageTypeResponse,
 			MessageID: messageID,
 			Content:   content,
-			ExitCode:  exitCode,
+			ExitCode:  finalExit,
 			Timestamp: time.Now(),
 		})
 	}
 
-	// Store the response message
-	responseContent := stdout
-	if stderr != "" {
-		responseContent += "\n" + stderr
+	// Store final response once
+	responseContent := fullStdout.String()
+	if serr := fullStderr.String(); serr != "" {
+		responseContent += "\n" + serr
 	}
-	if err != nil {
-		responseContent = err.Error()
+	if finalError != "" {
+		responseContent += "\nError: " + finalError
 	}
 
 	responseMsg := &storage.SessionMessage{
@@ -342,7 +403,7 @@ func (s *Session) handlePrompt(workspace *storage.Workspace, incoming *IncomingM
 		SessionID:   s.ID,
 		MessageType: "ai_response",
 		Content:     responseContent,
-		ExitCode:    exitCode,
+		ExitCode:    finalExit,
 		CreatedAt:   time.Now(),
 	}
 	if err := s.Manager.store.SessionMessages().Create(ctx, responseMsg); err != nil {
