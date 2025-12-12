@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/queue/asynq"
-	"github.com/aetherium/aetherium/pkg/service"
-	"github.com/aetherium/aetherium/pkg/storage/postgres"
-	"github.com/aetherium/aetherium/pkg/vmm/firecracker"
-	"github.com/aetherium/aetherium/pkg/worker"
+	"github.com/aetherium/aetherium/services/core/pkg/queue/asynq"
+	"github.com/aetherium/aetherium/services/core/pkg/service"
+	"github.com/aetherium/aetherium/services/core/pkg/storage/postgres"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm/firecracker"
+	"github.com/aetherium/aetherium/services/core/pkg/worker"
 )
 
 // TestVMToolInstallation tests the VM tool installation feature

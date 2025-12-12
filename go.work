@@ -1,0 +1,9 @@
+go 1.25.3
+
+use (
+	./libs/common
+	./libs/types
+	./services/core
+	./services/gateway
+	./services/k8s-manager
+)
