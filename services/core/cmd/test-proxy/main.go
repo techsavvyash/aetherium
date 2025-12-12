@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/aetherium/aetherium/pkg/config"
-	"github.com/aetherium/aetherium/pkg/network"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
+	"github.com/aetherium/aetherium/services/core/pkg/network"
 )
 
 func main() {

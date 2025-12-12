@@ -3,7 +3,7 @@ package logging
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // Logger defines the interface for logging implementations

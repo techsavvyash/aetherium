@@ -3,7 +3,7 @@ package integrations
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // Integration defines the interface for integration implementations

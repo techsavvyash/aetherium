@@ -3,7 +3,7 @@ package vmm
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // VMOrchestrator defines the interface for VM orchestration implementations

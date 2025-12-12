@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aetherium/aetherium/pkg/config"
-	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/queue/memory"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
+	"github.com/aetherium/aetherium/services/core/pkg/queue/memory"
 )
 
 // DefaultQueueFactory creates TaskQueue instances

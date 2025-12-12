@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/config"
-	"github.com/aetherium/aetherium/pkg/network"
-	"github.com/aetherium/aetherium/pkg/service"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
+	"github.com/aetherium/aetherium/services/core/pkg/network"
+	"github.com/aetherium/aetherium/services/core/pkg/service"
 )
 
 func main() {

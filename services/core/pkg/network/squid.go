@@ -13,7 +13,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/config"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
 )
 
 // SquidManager manages Squid proxy process and configuration

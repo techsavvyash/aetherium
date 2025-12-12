@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/network"
-	"github.com/aetherium/aetherium/pkg/types"
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/services/core/pkg/network"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/mdlayher/vsock"

@@ -6,8 +6,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/aetherium/aetherium/pkg/config"
-	"github.com/aetherium/aetherium/pkg/storage/postgres"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
+	"github.com/aetherium/aetherium/services/core/pkg/storage/postgres"
 )
 
 func main() {

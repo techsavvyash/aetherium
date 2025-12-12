@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/aetherium/aetherium/pkg/integrations"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/services/gateway/pkg/integrations"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // GitHubIntegration implements the Integration interface for GitHub

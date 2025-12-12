@@ -6,13 +6,13 @@ import (
 	"log"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/mcp"
-	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/service"
-	"github.com/aetherium/aetherium/pkg/storage"
-	"github.com/aetherium/aetherium/pkg/tools"
-	"github.com/aetherium/aetherium/pkg/types"
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/services/core/pkg/mcp"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
+	"github.com/aetherium/aetherium/services/core/pkg/service"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
+	"github.com/aetherium/aetherium/services/core/pkg/tools"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 	"github.com/google/uuid"
 )
 

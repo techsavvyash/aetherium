@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/types"
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 )
 
 // DockerOrchestrator implements vmm.VMOrchestrator using Docker

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aetherium/aetherium/pkg/vmm"
-	"github.com/aetherium/aetherium/pkg/vmm/docker"
-	"github.com/aetherium/aetherium/pkg/vmm/firecracker"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm/docker"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm/firecracker"
 )
 
 // DefaultVMMFactory creates VMOrchestrator instances

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 func TestFirecrackerOrchestrator_CreateVM(t *testing.T) {

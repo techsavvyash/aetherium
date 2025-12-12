@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/logging"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/common/pkg/logging"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // StdoutLogger is a simple logger that writes to stdout

@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 	fcvsock "github.com/firecracker-microvm/firecracker-go-sdk/vsock"
 )
 

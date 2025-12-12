@@ -3,7 +3,7 @@ package events
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // EventBus defines the interface for event bus implementations

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/storage"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
 	"github.com/google/uuid"
 )
 

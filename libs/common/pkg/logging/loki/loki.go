@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/logging"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/common/pkg/logging"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // LokiLogger implements the Logger interface for Grafana Loki

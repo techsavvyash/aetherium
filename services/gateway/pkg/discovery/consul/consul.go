@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/discovery"
+	"github.com/aetherium/aetherium/services/gateway/pkg/discovery"
 	consulapi "github.com/hashicorp/consul/api"
 )
 
