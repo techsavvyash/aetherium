@@ -3,7 +3,7 @@ package network
 import (
 	"testing"
 
-	"github.com/aetherium/aetherium/pkg/config"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
 )
 
 // TestProxyConfigDefaults tests default proxy configuration

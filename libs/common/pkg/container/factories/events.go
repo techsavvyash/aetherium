@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aetherium/aetherium/pkg/events"
-	memoryevents "github.com/aetherium/aetherium/pkg/events/memory"
+	"github.com/aetherium/aetherium/libs/common/pkg/events"
+	memoryevents "github.com/aetherium/aetherium/libs/common/pkg/events/memory"
 )
 
 // DefaultEventBusFactory creates EventBus instances

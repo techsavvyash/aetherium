@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aetherium/aetherium/pkg/config"
-	"github.com/aetherium/aetherium/pkg/events"
-	"github.com/aetherium/aetherium/pkg/integrations"
-	"github.com/aetherium/aetherium/pkg/logging"
-	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/storage"
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
+	"github.com/aetherium/aetherium/libs/common/pkg/events"
+	"github.com/aetherium/aetherium/services/gateway/pkg/integrations"
+	"github.com/aetherium/aetherium/libs/common/pkg/logging"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 )
 
 // Container is a dependency injection container for managing component lifecycle

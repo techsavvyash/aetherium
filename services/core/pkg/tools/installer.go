@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 )
 
 // Installer handles tool installation in VMs

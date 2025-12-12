@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/discovery"
-	"github.com/aetherium/aetherium/pkg/storage"
+	"github.com/aetherium/aetherium/services/gateway/pkg/discovery"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
 )
 
 // WorkerService provides high-level worker management operations

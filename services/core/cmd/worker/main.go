@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/discovery"
-	"github.com/aetherium/aetherium/pkg/discovery/consul"
-	"github.com/aetherium/aetherium/pkg/queue/asynq"
-	"github.com/aetherium/aetherium/pkg/service"
-	"github.com/aetherium/aetherium/pkg/storage/postgres"
-	"github.com/aetherium/aetherium/pkg/vmm/firecracker"
-	"github.com/aetherium/aetherium/pkg/worker"
+	"github.com/aetherium/aetherium/services/gateway/pkg/discovery"
+	"github.com/aetherium/aetherium/services/gateway/pkg/discovery/consul"
+	"github.com/aetherium/aetherium/services/core/pkg/queue/asynq"
+	"github.com/aetherium/aetherium/services/core/pkg/service"
+	"github.com/aetherium/aetherium/services/core/pkg/storage/postgres"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm/firecracker"
+	"github.com/aetherium/aetherium/services/core/pkg/worker"
 	"github.com/google/uuid"
 )
 

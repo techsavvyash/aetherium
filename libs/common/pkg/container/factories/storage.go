@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aetherium/aetherium/pkg/storage"
-	memorystorage "github.com/aetherium/aetherium/pkg/storage/memory"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
+	memorystorage "github.com/aetherium/aetherium/services/core/pkg/storage/memory"
 )
 
 // DefaultStorageFactory creates StateStore instances

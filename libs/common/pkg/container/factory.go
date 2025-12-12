@@ -3,11 +3,11 @@ package container
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/events"
-	"github.com/aetherium/aetherium/pkg/logging"
-	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/storage"
-	"github.com/aetherium/aetherium/pkg/vmm"
+	"github.com/aetherium/aetherium/libs/common/pkg/events"
+	"github.com/aetherium/aetherium/libs/common/pkg/logging"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
+	"github.com/aetherium/aetherium/services/core/pkg/vmm"
 )
 
 // TaskQueueFactory creates TaskQueue instances based on provider name

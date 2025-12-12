@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/queue"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 )

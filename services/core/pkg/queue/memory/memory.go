@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/queue"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/services/core/pkg/queue"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // MemoryQueue is an in-memory implementation of TaskQueue for testing

@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/aetherium/aetherium/pkg/integrations"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/services/gateway/pkg/integrations"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // SlackIntegration implements the Integration interface for Slack

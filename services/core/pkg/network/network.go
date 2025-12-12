@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/aetherium/aetherium/pkg/config"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
 )
 
 // NetworkConfig holds network configuration

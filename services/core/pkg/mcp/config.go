@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aetherium/aetherium/pkg/storage"
+	"github.com/aetherium/aetherium/services/core/pkg/storage"
 )
 
 // ClaudeSettings represents the ~/.claude/settings.json structure

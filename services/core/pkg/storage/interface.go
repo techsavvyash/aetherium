@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // StateStore defines the interface for state persistence implementations

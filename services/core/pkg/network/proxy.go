@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/config"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
 )
 
 // ProxyManager manages the proxy infrastructure for VM traffic filtering

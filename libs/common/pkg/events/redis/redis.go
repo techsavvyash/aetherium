@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aetherium/aetherium/pkg/events"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/common/pkg/events"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 	"github.com/redis/go-redis/v9"
 )
 

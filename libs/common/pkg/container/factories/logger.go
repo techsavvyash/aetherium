@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aetherium/aetherium/pkg/config"
-	"github.com/aetherium/aetherium/pkg/logging"
-	"github.com/aetherium/aetherium/pkg/logging/stdout"
+	"github.com/aetherium/aetherium/libs/common/pkg/config"
+	"github.com/aetherium/aetherium/libs/common/pkg/logging"
+	"github.com/aetherium/aetherium/libs/common/pkg/logging/stdout"
 )
 
 // DefaultLoggerFactory creates Logger instances

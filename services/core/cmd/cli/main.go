@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aetherium/aetherium/pkg/queue/asynq"
-	"github.com/aetherium/aetherium/pkg/service"
-	"github.com/aetherium/aetherium/pkg/storage/postgres"
+	"github.com/aetherium/aetherium/services/core/pkg/queue/asynq"
+	"github.com/aetherium/aetherium/services/core/pkg/service"
+	"github.com/aetherium/aetherium/services/core/pkg/storage/postgres"
 	"github.com/google/uuid"
 )
 

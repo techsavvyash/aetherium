@@ -3,7 +3,7 @@ package queue
 import (
 	"context"
 
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // TaskQueue defines the interface for task queue implementations

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aetherium/aetherium/pkg/events"
-	"github.com/aetherium/aetherium/pkg/types"
+	"github.com/aetherium/aetherium/libs/common/pkg/events"
+	"github.com/aetherium/aetherium/libs/types/pkg/domain"
 )
 
 // MemoryEventBus is an in-memory implementation of EventBus for testing
