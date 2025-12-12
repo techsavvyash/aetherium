@@ -1,0 +1,127 @@
+.PHONY: help build test lint fmt clean docker-up docker-down deps install build-core build-gateway build-k8s-manager build-dashboard test-core test-gateway
+
+help:
+	@echo "╔════════════════════════════════════════════════════════════╗"
+	@echo "║         Aetherium Monorepo Build System                   ║"
+	@echo "╚════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "Building Services:"
+	@echo "  make build              - Build all services"
+	@echo "  make build-core         - Build core service only"
+	@echo "  make build-gateway      - Build gateway service only"
+	@echo "  make build-k8s-manager  - Build k8s-manager service only"
+	@echo "  make build-dashboard    - Build dashboard only"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test               - Test all services"
+	@echo "  make test-core          - Test core service only"
+	@echo "  make test-gateway       - Test gateway service only"
+	@echo "  make test-coverage      - Generate coverage reports"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make lint               - Lint all services"
+	@echo "  make fmt                - Format all code"
+	@echo ""
+	@echo "Infrastructure:"
+	@echo "  make docker-build       - Build all Docker images"
+	@echo "  make docker-up          - Start infrastructure (PostgreSQL, Redis)"
+	@echo "  make docker-down        - Stop infrastructure"
+	@echo ""
+	@echo "Development:"
+	@echo "  make deps               - Download all dependencies"
+	@echo "  make clean              - Clean all build artifacts"
+	@echo ""
+
+# Building
+build:
+	@echo "🔨 Building all services..."
+	$(MAKE) build-core
+	$(MAKE) build-gateway
+	$(MAKE) build-k8s-manager
+	@echo "✅ All services built!"
+
+build-core:
+	@echo "📦 Building core service..."
+	cd services/core && $(MAKE) build
+
+build-gateway:
+	@echo "📦 Building gateway service..."
+	cd services/gateway && $(MAKE) build
+
+build-k8s-manager:
+	@echo "📦 Building k8s-manager service..."
+	cd services/k8s-manager && $(MAKE) build
+
+build-dashboard:
+	@echo "📦 Building dashboard..."
+	cd services/dashboard && npm run build
+
+# Testing
+test:
+	@echo "🧪 Testing all services..."
+	$(MAKE) test-core
+	$(MAKE) test-gateway
+
+test-core:
+	@echo "🧪 Testing core service..."
+	cd services/core && $(MAKE) test
+
+test-gateway:
+	@echo "🧪 Testing gateway service..."
+	cd services/gateway && $(MAKE) test
+
+test-coverage:
+	@echo "📊 Generating coverage reports..."
+	cd services/core && $(MAKE) test-coverage
+	cd services/gateway && $(MAKE) test-coverage
+
+# Code Quality
+lint:
+	@echo "🔍 Linting all services..."
+	cd services/core && $(MAKE) lint
+	cd services/gateway && $(MAKE) lint
+	cd services/k8s-manager && $(MAKE) lint
+
+fmt:
+	@echo "✨ Formatting all code..."
+	cd services/core && $(MAKE) fmt
+	cd services/gateway && $(MAKE) fmt
+	cd services/k8s-manager && $(MAKE) fmt
+
+# Dependencies
+deps:
+	@echo "📥 Downloading dependencies..."
+	go work sync
+	cd services/core && $(MAKE) deps
+	cd services/gateway && $(MAKE) deps
+	cd services/k8s-manager && $(MAKE) deps
+	cd libs/common && $(MAKE) deps 2>/dev/null || go mod tidy
+	cd libs/types && $(MAKE) deps 2>/dev/null || go mod tidy
+
+# Docker
+docker-build:
+	@echo "🐳 Building Docker images..."
+	docker-compose -f docker-compose.yml build
+
+docker-up:
+	@echo "🚀 Starting infrastructure..."
+	docker-compose -f docker-compose.yml up -d
+	@echo "✅ Infrastructure started!"
+
+docker-down:
+	@echo "🛑 Stopping infrastructure..."
+	docker-compose -f docker-compose.yml down
+
+# Cleanup
+clean:
+	@echo "🧹 Cleaning build artifacts..."
+	cd services/core && $(MAKE) clean
+	cd services/gateway && $(MAKE) clean
+	cd services/k8s-manager && $(MAKE) clean
+	rm -f coverage.out coverage.html
+	go clean
+	@echo "✅ Cleanup complete!"
+
+# Combined
+install: deps build
+	@echo "✅ Installation complete!"
