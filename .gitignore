@@ -47,3 +47,7 @@ logs/
 *.pem
 *.key
 secrets/
+
+# Node modules
+node_modules/
+**/node_modules/
