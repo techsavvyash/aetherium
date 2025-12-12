@@ -11,7 +11,7 @@ import * as k8s from "@pulumi/kubernetes";
  */
 
 export interface BareMetalNodeOptions {
-    namespace: pulumi.Output<string>;
+    namespace: string;
     environment: string;
     // List of node names that have KVM support
     kvmNodeNames?: string[];
@@ -232,9 +232,10 @@ echo "Node \$NODE_NAME labeled for Aetherium workers"
         },
     });
 
-    // Get count of worker nodes (nodes with KVM label)
-    const workerNodes = k8s.core.v1.Node.get("worker-nodes", "");
-    const workerNodeCount = pulumi.output(1); // Default, actual count from cluster
+    // Note: Getting actual worker node count requires querying the cluster
+    // For now, we return a default of 1. In production, you would query:
+    // kubectl get nodes -l aetherium.io/kvm-enabled=true
+    const workerNodeCount = pulumi.output(1); // Placeholder - query cluster in production
 
     return {
         nodePreparationDaemonSet,

@@ -1,0 +1,4 @@
+config:
+  environment: development
+  kubernetes:clusterName: aetherium-cluster-dev
+  cloud:provider: local

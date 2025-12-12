@@ -13,47 +13,55 @@ const cloudConfig = new pulumi.Config("cloud");
 const clusterName = clusterConfig.get("clusterName") || "aetherium-cluster";
 const provider = cloudConfig.get("provider") || "local";
 
-// Main deployment
-async function main() {
-    // Create namespace
-    const namespace = createNamespace("aetherium", {
-        environment,
-        labels: {
-            "app.kubernetes.io/managed-by": "pulumi",
-            "app.kubernetes.io/part-of": "aetherium",
-        },
-    });
+// Create namespace
+const namespace = createNamespace("aetherium", {
+    environment,
+    labels: {
+        "app.kubernetes.io/managed-by": "pulumi",
+        "app.kubernetes.io/part-of": "aetherium",
+    },
+});
 
-    // Deploy infrastructure components (Redis, PostgreSQL, Loki)
-    const infra = deployInfrastructure(namespace.metadata.name, {
+// Get namespace name - extract from Output<string>
+const namespaceName = namespace.metadata.name.apply(n => n);
+
+// Deploy infrastructure components (Redis, PostgreSQL, Loki)
+const infra = pulumi.all([namespaceName]).apply(([nsName]) =>
+    deployInfrastructure(nsName, {
         environment,
         enableLoki: environment === "production",
         enableConsul: environment === "production",
-    });
+    })
+);
 
-    // Deploy Aetherium services using Helm
-    const aetherium = deployAetherium(namespace.metadata.name, {
+// Deploy Aetherium services using Helm
+const aetherium = pulumi.all([namespaceName, infra]).apply(([nsName, infraOutput]) =>
+    deployAetherium(nsName, {
         environment,
-        postgres: infra.postgres,
-        redis: infra.redis,
+        postgres: infraOutput.postgres,
+        redis: infraOutput.redis,
         imageTag: environment === "production" ? "latest" : "dev",
-    });
-
-    return {
-        namespace: namespace.metadata.name,
-        environment,
-        clusterName,
-        provider,
-        services: {
-            apiGateway: aetherium.apiGateway.status,
-            worker: aetherium.worker.status,
-        },
-        endpoints: {
-            postgres: infra.postgres.serviceName,
-            redis: infra.redis.serviceName,
-        },
-    };
-}
+    })
+);
 
 // Export outputs
-export const outputs = main();
+export const outputs = pulumi.all([namespaceName, infra, aetherium]).apply(([nsName, infraOutput, aetheriumOutput]) => ({
+    namespace: nsName,
+    environment,
+    clusterName,
+    provider,
+    infrastructure: {
+        postgres: {
+            serviceName: infraOutput.postgres.serviceName,
+            port: infraOutput.postgres.port,
+        },
+        redis: {
+            serviceName: infraOutput.redis.serviceName,
+            port: infraOutput.redis.port,
+        },
+    },
+    aetherium: {
+        helmReleaseId: aetheriumOutput.helmRelease.id,
+        helmReleaseName: aetheriumOutput.helmRelease.name,
+    },
+}));

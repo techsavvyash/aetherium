@@ -208,7 +208,7 @@ export function getGCPNodePoolConfig(config: NodePoolConfig): {
  * Create a ConfigMap with cloud-init scripts for manual node setup
  */
 export function createCloudInitConfigMap(
-    namespace: pulumi.Output<string>,
+    namespace: string,
     config: {
         firecrackerVersion?: string;
         kernelUrl?: string;

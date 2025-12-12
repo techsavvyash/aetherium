@@ -8,13 +8,13 @@ export interface InfrastructureOptions {
 }
 
 export interface PostgresOutput {
-    serviceName: pulumi.Output<string>;
+    serviceName: string | pulumi.Output<string>;
     secretName: string;
     port: number;
 }
 
 export interface RedisOutput {
-    serviceName: pulumi.Output<string>;
+    serviceName: string | pulumi.Output<string>;
     port: number;
 }
 
@@ -31,7 +31,7 @@ export interface InfrastructureOutput {
 }
 
 export function deployInfrastructure(
-    namespace: pulumi.Output<string>,
+    namespace: string,
     options: InfrastructureOptions
 ): InfrastructureOutput {
     const labels = {
@@ -40,6 +40,7 @@ export function deployInfrastructure(
     };
 
     // PostgreSQL Secret
+    const postgresPassword = pulumi.secret("aetherium-secret-password");
     const postgresSecret = new k8s.core.v1.Secret("postgres-secret", {
         metadata: {
             name: "postgres-credentials",
@@ -47,11 +48,11 @@ export function deployInfrastructure(
             labels,
         },
         type: "Opaque",
-        stringData: {
+        stringData: postgresPassword.apply(pwd => ({
             "POSTGRES_USER": "aetherium",
-            "POSTGRES_PASSWORD": pulumi.secret("aetherium-secret-password"),
+            "POSTGRES_PASSWORD": pwd,
             "POSTGRES_DB": "aetherium",
-        },
+        })),
     });
 
     // PostgreSQL StatefulSet
@@ -376,14 +377,18 @@ export function deployInfrastructure(
         });
     }
 
+    // Return infrastructure outputs
+    const postgresServiceName = postgresService.metadata.name;
+    const redisServiceName = redisService.metadata.name;
+
     return {
         postgres: {
-            serviceName: postgresService.metadata.name,
+            serviceName: postgresServiceName,
             secretName: "postgres-credentials",
             port: 5432,
         },
         redis: {
-            serviceName: redisService.metadata.name,
+            serviceName: redisServiceName,
             port: 6379,
         },
         consul,

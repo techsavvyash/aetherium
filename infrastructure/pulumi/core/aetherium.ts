@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as k8s from "@pulumi/kubernetes";
+import * as path from "path";
 import { PostgresOutput, RedisOutput } from "./infrastructure";
 
 export interface AetheriumOptions {
@@ -11,13 +12,11 @@ export interface AetheriumOptions {
 }
 
 export interface AetheriumOutput {
-    apiGateway: k8s.apps.v1.Deployment;
-    worker: k8s.apps.v1.DaemonSet;
     helmRelease: k8s.helm.v3.Release;
 }
 
 export function deployAetherium(
-    namespace: pulumi.Output<string>,
+    namespace: string,
     options: AetheriumOptions
 ): AetheriumOutput {
     const imageTag = options.imageTag || "latest";
@@ -27,7 +26,7 @@ export function deployAetherium(
     const helmRelease = new k8s.helm.v3.Release("aetherium", {
         name: "aetherium",
         namespace: namespace,
-        chart: "../helm/aetherium",
+        chart: path.resolve(__dirname, "../../../helm/aetherium"),
         values: {
             global: {
                 environment: options.environment,
@@ -142,20 +141,7 @@ export function deployAetherium(
         },
     });
 
-    // Get references to deployed resources
-    const apiGateway = k8s.apps.v1.Deployment.get(
-        "api-gateway-deployment",
-        pulumi.interpolate`${namespace}/aetherium-api-gateway`
-    );
-
-    const worker = k8s.apps.v1.DaemonSet.get(
-        "worker-daemonset",
-        pulumi.interpolate`${namespace}/aetherium-worker`
-    );
-
     return {
-        apiGateway,
-        worker,
         helmRelease,
     };
 }

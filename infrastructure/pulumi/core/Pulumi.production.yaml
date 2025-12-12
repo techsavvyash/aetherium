@@ -1,0 +1,4 @@
+config:
+  environment: production
+  kubernetes:clusterName: aetherium-cluster-prod
+  cloud:provider: aws
