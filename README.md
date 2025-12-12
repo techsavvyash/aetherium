@@ -4,12 +4,14 @@
 
 Aetherium is a secure, scalable platform for running AI agents in isolated microVMs with command execution capabilities and a plugin-based architecture for maximum flexibility.
 
-## Current Status
+## Quick Links
 
-✅ **Phase 1 Complete** - VM Management & Command Execution Working
-📅 **Last Updated:** 2025-10-04
-
-[See detailed status →](docs/CURRENT_STATUS.md)
+- **[Documentation Hub](docs/)** - Complete documentation
+- **[Quick Start](docs/quickstart.md)** - Get running in 5 minutes
+- **[Setup Guide](docs/setup.md)** - Detailed installation
+- **[Architecture](docs/architecture.md)** - System design
+- **[Monorepo Guide](docs/monorepo.md)** - Project structure
+- **[Troubleshooting](docs/troubleshooting/)** - Common issues
 
 ## Architecture
 
@@ -151,13 +153,24 @@ go test ./pkg/vmm/firecracker
 go test -cover ./...
 ```
 
-## Documentation
+## Documentation Index
 
-- **[Current Status](docs/CURRENT_STATUS.md)** - What's working now
-- **[VM CLI Guide](docs/VM-CLI-GUIDE.md)** - CLI usage and examples
-- **[Command Execution Guide](docs/COMMAND-EXECUTION-GUIDE.md)** - API usage
-- **[Implementation Plan](docs/implementation-plan.md)** - Full project roadmap
-- **[Firecracker VMM](docs/firecracker-vmm.md)** - Firecracker API reference
+**Getting Started:**
+- [Quick Start](docs/quickstart.md) - 5-minute setup
+- [Setup Guide](docs/setup.md) - Full installation
+- [Architecture](docs/architecture.md) - System design
+
+**Development:**
+- [Monorepo Guide](docs/monorepo.md) - Project structure
+- [API Reference](docs/api-gateway.md) - REST API docs
+- [Tools & Provisioning](docs/tools-provisioning.md) - Tool system
+
+**Operations:**
+- [Integrations](docs/integrations.md) - GitHub, Slack plugins
+- [Kubernetes](docs/kubernetes.md) - K8s deployment
+- [Production Architecture](docs/production-architecture.md) - Enterprise setup
+
+See [docs/README.md](docs/README.md) for complete documentation.
 
 ## Programmatic Usage
 
@@ -204,15 +217,12 @@ func main() {
 }
 ```
 
-## Next Steps
+## Getting Started
 
-See the [todo list](docs/CURRENT_STATUS.md#-pending-components) for upcoming features:
-
-1. DI Container & Factory Pattern
-2. In-Memory Providers (for testing)
-3. Redis Task Queue
-4. PostgreSQL State Store
-5. Integration Framework
+1. Read [Quick Start](docs/quickstart.md) for 5-minute setup
+2. Follow [Setup Guide](docs/setup.md) for complete installation
+3. Check [Troubleshooting](docs/troubleshooting/) if issues arise
+4. Explore [Architecture](docs/architecture.md) to understand the system
 
 ## License
 
