@@ -20,9 +20,9 @@ func (r *workspaceRepository) Create(ctx context.Context, workspace *storage.Wor
 	query := `
 		INSERT INTO workspaces (
 			id, name, description, vm_id, status, ai_assistant, ai_assistant_config,
-			working_directory, environment_id, metadata
+			working_directory, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+			$1, $2, $3, $4, $5, $6, $7, $8, $9
 		)`
 
 	// Initialize with empty JSON object as default for JSONB columns
@@ -47,7 +47,7 @@ func (r *workspaceRepository) Create(ctx context.Context, workspace *storage.Wor
 	_, err = r.db.ExecContext(ctx, query,
 		workspace.ID, workspace.Name, workspace.Description, workspace.VMID,
 		workspace.Status, workspace.AIAssistant, configJSON,
-		workspace.WorkingDirectory, workspace.EnvironmentID, metadataJSON,
+		workspace.WorkingDirectory, metadataJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create workspace: %w", err)

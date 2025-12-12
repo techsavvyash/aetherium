@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/mdlayher/vsock"
 )
 
@@ -31,15 +32,18 @@ const (
 
 // Request types
 const (
-	RequestTypeCommand    = "execute"
-	RequestTypeGetSecrets = "get_secrets"
-	RequestTypeShutdown   = "shutdown"
+	RequestTypeCommand       = "execute"
+	RequestTypeCommandStream = "execute_stream"
+	RequestTypeGetSecrets    = "get_secrets"
+	RequestTypeShutdown      = "shutdown"
 )
 
 // Response types
 const (
-	ResponseTypeSuccess = "success"
-	ResponseTypeError   = "error"
+	ResponseTypeSuccess    = "success"
+	ResponseTypeError      = "error"
+	ResponseTypeStreamData = "stream_data"
+	ResponseTypeStreamExit = "stream_exit"
 )
 
 // Generic request/response structures
@@ -65,6 +69,18 @@ type CommandResponse struct {
 	ExitCode int    `json:"exit_code"`
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
+	Error    string `json:"error,omitempty"`
+}
+
+// StreamDataPayload is the payload for stream_data responses
+type StreamDataPayload struct {
+	Stdout string `json:"stdout,omitempty"`
+	Stderr string `json:"stderr,omitempty"`
+}
+
+// StreamExitPayload is the payload for stream_exit responses
+type StreamExitPayload struct {
+	ExitCode int    `json:"exit_code"`
 	Error    string `json:"error,omitempty"`
 }
 
@@ -348,6 +364,17 @@ func handleRequest(conn net.Conn, req *Request, secretStore *SecretStore, idleTr
 		payload, _ := json.Marshal(cmdResp)
 		sendResponse(conn, ResponseTypeSuccess, payload, "")
 
+	case RequestTypeCommandStream:
+		// Parse command from payload
+		var cmdReq CommandRequest
+		if err := json.Unmarshal(req.Payload, &cmdReq); err != nil {
+			sendResponse(conn, ResponseTypeError, nil, fmt.Sprintf("Invalid command payload: %v", err))
+			return
+		}
+
+		// Execute command with streaming output
+		executeCommandStream(conn, &cmdReq, secretStore, idleTracker)
+
 	case RequestTypeShutdown:
 		log.Println("Received shutdown request")
 		sendResponse(conn, ResponseTypeSuccess, nil, "")
@@ -431,6 +458,95 @@ func executeCommandWithSecrets(req *CommandRequest, secretStore *SecretStore) Co
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 	}
+}
+
+// buildCommandEnv creates environment variables for a command including secrets
+func buildCommandEnv(req *CommandRequest, secretStore *SecretStore) []string {
+	env := os.Environ()
+
+	// Add request-specific environment variables if provided
+	if len(req.Env) > 0 {
+		env = append(env, req.Env...)
+	}
+
+	// Inject secrets from in-memory store
+	secrets := secretStore.GetAll()
+	for key, value := range secrets {
+		env = append(env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	if len(secrets) > 0 {
+		log.Printf("Injected %d secrets into command environment from memory", len(secrets))
+	}
+
+	return env
+}
+
+// executeCommandStream executes a command with PTY and streams output in real-time
+func executeCommandStream(conn net.Conn, req *CommandRequest, secretStore *SecretStore, idleTracker *IdleTracker) {
+	log.Printf("Streaming execute: %s %v", req.Cmd, req.Args)
+
+	cmd := exec.Command(req.Cmd, req.Args...)
+	cmd.Env = buildCommandEnv(req, secretStore)
+
+	// Start command under a PTY for proper TUI support
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		sendResponse(conn, ResponseTypeError, nil, fmt.Sprintf("Failed to start PTY: %v", err))
+		return
+	}
+	defer func() { _ = ptmx.Close() }()
+
+	// Set terminal size (80x24 default, can be made configurable later)
+	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80})
+
+	buf := make([]byte, 4096)
+
+	// Read PTY output and stream as JSON chunks
+	for {
+		n, readErr := ptmx.Read(buf)
+		if n > 0 {
+			idleTracker.UpdateActivity()
+
+			chunk := string(buf[:n])
+			payload, _ := json.Marshal(StreamDataPayload{
+				Stdout: chunk,
+			})
+			sendResponse(conn, ResponseTypeStreamData, payload, "")
+		}
+
+		if readErr != nil {
+			if readErr != io.EOF {
+				log.Printf("PTY read error: %v", readErr)
+			}
+			break
+		}
+	}
+
+	// Wait for process exit and send final status
+	exitCode := 0
+	var exitErrMsg string
+
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				exitCode = status.ExitStatus()
+			} else {
+				exitCode = 1
+			}
+		} else {
+			exitCode = 1
+			exitErrMsg = fmt.Sprintf("Failed to execute: %v", err)
+		}
+	}
+
+	exitPayload, _ := json.Marshal(StreamExitPayload{
+		ExitCode: exitCode,
+		Error:    exitErrMsg,
+	})
+	sendResponse(conn, ResponseTypeStreamExit, exitPayload, exitErrMsg)
+
+	log.Printf("Streaming execute completed: exit_code=%d", exitCode)
 }
 
 func sendError(conn net.Conn, errMsg string) {

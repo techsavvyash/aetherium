@@ -91,6 +91,14 @@ interface TerminalViewProps {
   readOnly?: boolean;
   onInput?: (data: string) => void;
   title?: string;
+  streamingMode?: boolean; // When true, output is treated as append-only chunks
+  onClear?: () => void; // Callback when terminal is cleared
+}
+
+// Imperative handle for controlling the terminal
+export interface TerminalViewHandle {
+  clear: () => void;
+  write: (data: string) => void;
 }
 
 export function TerminalView({
@@ -100,6 +108,8 @@ export function TerminalView({
   readOnly = true,
   onInput,
   title = "Terminal Output",
+  streamingMode = false,
+  onClear,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<TerminalInstance | null>(null);
@@ -109,6 +119,15 @@ export function TerminalView({
   const [copied, setCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const lastOutputRef = useRef<string>("");
+
+  // Clear terminal function
+  const clearTerminal = useCallback(() => {
+    if (terminalRef.current) {
+      terminalRef.current.clear();
+      lastOutputRef.current = "";
+      onClear?.();
+    }
+  }, [onClear]);
 
   // Initialize ghostty-web
   useEffect(() => {
@@ -208,10 +227,22 @@ export function TerminalView({
 
   // Write output to terminal
   useEffect(() => {
-    if (!isTerminalReady || !terminalRef.current || !output) {
-      console.log("[TerminalView] Skipping write - terminal ready:", isTerminalReady, "ref:", !!terminalRef.current, "output:", !!output);
+    if (!isTerminalReady || !terminalRef.current) {
       return;
     }
+
+    // In streaming mode, output is already the new delta chunk - just append it
+    if (streamingMode) {
+      if (output && output !== lastOutputRef.current) {
+        // Write the new output directly (it's a delta chunk)
+        terminalRef.current.write(output);
+        lastOutputRef.current = output;
+      }
+      return;
+    }
+
+    // Non-streaming mode: handle cumulative output with diffing
+    if (!output) return;
 
     // Check if output changed
     if (output !== lastOutputRef.current) {
@@ -233,7 +264,7 @@ export function TerminalView({
       }
       lastOutputRef.current = output;
     }
-  }, [output, isTerminalReady]);
+  }, [output, isTerminalReady, streamingMode]);
 
   const handleCopy = useCallback(async () => {
     try {

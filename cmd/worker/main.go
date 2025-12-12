@@ -156,11 +156,6 @@ func main() {
 	} else {
 		// Set workspace service on worker for secret decryption
 		w.SetWorkspaceService(workspaceService)
-
-		// Register workspace handlers
-		if err := w.RegisterWorkspaceHandlers(queue); err != nil {
-			log.Fatalf("Failed to register workspace handlers: %v", err)
-		}
 		log.Println("  Registered handlers: workspace:create, workspace:delete, prompt:execute")
 	}
 

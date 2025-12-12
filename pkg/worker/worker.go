@@ -297,6 +297,11 @@ func (w *Worker) RegisterHandlers(q queue.Queue) error {
 		return fmt.Errorf("failed to register VM delete handler: %w", err)
 	}
 
+	// Register workspace handlers (separate function)
+	if err := w.RegisterWorkspaceHandlers(q); err != nil {
+		return fmt.Errorf("failed to register workspace handlers: %w", err)
+	}
+
 	return nil
 }
 

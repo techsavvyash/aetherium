@@ -236,6 +236,30 @@ func (d *DockerOrchestrator) ExecuteCommand(ctx context.Context, vmID string, cm
 	}, nil
 }
 
+// ExecuteCommandStream executes a command in a Docker container with streaming output
+// This is a simple wrapper around ExecuteCommand that emits a single chunk
+func (d *DockerOrchestrator) ExecuteCommandStream(ctx context.Context, vmID string, cmd *vmm.Command, handler vmm.StreamHandler) error {
+	result, err := d.ExecuteCommand(ctx, vmID, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Send stdout if present
+	if result.Stdout != "" {
+		handler(&vmm.ExecStreamChunk{Stdout: result.Stdout})
+	}
+
+	// Send stderr if present
+	if result.Stderr != "" {
+		handler(&vmm.ExecStreamChunk{Stderr: result.Stderr})
+	}
+
+	// Send exit code
+	handler(&vmm.ExecStreamChunk{ExitCode: &result.ExitCode})
+
+	return nil
+}
+
 // Health returns the health status of the orchestrator
 func (d *DockerOrchestrator) Health(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", "info")

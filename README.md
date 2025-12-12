@@ -153,11 +153,20 @@ go test -cover ./...
 
 ## Documentation
 
+**Start here:** [📖 Documentation Index](docs/INDEX.md) - Complete guide to all documentation
+
+**Quick links:**
+- **[Setup Guide](docs/SETUP_GUIDE.md)** - One-time setup and daily operations
+- **[Testing Guide](docs/TESTING_GUIDE.md)** - How to verify everything works
 - **[Current Status](docs/CURRENT_STATUS.md)** - What's working now
-- **[VM CLI Guide](docs/VM-CLI-GUIDE.md)** - CLI usage and examples
-- **[Command Execution Guide](docs/COMMAND-EXECUTION-GUIDE.md)** - API usage
-- **[Implementation Plan](docs/implementation-plan.md)** - Full project roadmap
-- **[Firecracker VMM](docs/firecracker-vmm.md)** - Firecracker API reference
+- **[Architecture](docs/design.md)** - System design and architecture
+- **[API Gateway](docs/API-GATEWAY.md)** - REST API reference
+- **[Deployment](docs/DEPLOYMENT.md)** - Production deployment guide
+
+**For different roles:**
+- **Developers:** Read [CLAUDE.md](CLAUDE.md) + [docs/design.md](docs/design.md)
+- **Admins:** Read [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) + [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- **DevOps:** Read [docs/PRODUCTION-ARCHITECTURE.md](docs/PRODUCTION-ARCHITECTURE.md) + [docs/KUBERNETES.md](docs/KUBERNETES.md)
 
 ## Programmatic Usage
 
