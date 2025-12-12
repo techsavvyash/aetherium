@@ -6,4 +6,5 @@ use (
 	./services/core
 	./services/gateway
 	./services/k8s-manager
+	./tests/integration
 )
