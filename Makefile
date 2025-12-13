@@ -21,11 +21,11 @@ help:
 go-build:
 	@echo "Building Go services..."
 	@mkdir -p $(BINARY_DIR)
-	$(GO) build -o $(BINARY_DIR)/api-gateway ./cmd/api-gateway
-	$(GO) build -o $(BINARY_DIR)/worker ./cmd/worker
-	$(GO) build -o $(BINARY_DIR)/aether-cli ./cmd/aether-cli
-	$(GO) build -o $(BINARY_DIR)/fc-agent ./cmd/fc-agent
-	$(GO) build -o $(BINARY_DIR)/migrate ./cmd/migrate
+	$(GO) build -o $(BINARY_DIR)/api-gateway ./services/gateway/cmd/api-gateway
+	$(GO) build -o $(BINARY_DIR)/worker ./services/core/cmd/worker
+	$(GO) build -o $(BINARY_DIR)/aether-cli ./services/core/cmd/cli
+	$(GO) build -o $(BINARY_DIR)/fc-agent ./services/core/cmd/fc-agent
+	$(GO) build -o $(BINARY_DIR)/migrate ./services/core/cmd/migrate
 
 build: go-build
 	@echo "Build complete!"
@@ -39,10 +39,10 @@ run-worker: build
 
 # Testing
 test:
-	$(GO) test -v -race ./...
+	$(GO) test -v -race ./libs/common/... ./libs/types/... ./services/core/... ./services/gateway/... ./services/k8s-manager/... ./tests/integration/...
 
 test-coverage:
-	$(GO) test -v -race -coverprofile=coverage.out ./...
+	$(GO) test -v -race -coverprofile=coverage.out ./libs/common/... ./libs/types/... ./services/core/... ./services/gateway/... ./services/k8s-manager/... ./tests/integration/...
 	$(GO) tool cover -html=coverage.out -o coverage.html
 
 # Linting

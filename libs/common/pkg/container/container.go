@@ -7,11 +7,11 @@ import (
 
 	"github.com/aetherium/aetherium/libs/common/pkg/config"
 	"github.com/aetherium/aetherium/libs/common/pkg/events"
-	"github.com/aetherium/aetherium/services/gateway/pkg/integrations"
 	"github.com/aetherium/aetherium/libs/common/pkg/logging"
 	"github.com/aetherium/aetherium/services/core/pkg/queue"
 	"github.com/aetherium/aetherium/services/core/pkg/storage"
 	"github.com/aetherium/aetherium/services/core/pkg/vmm"
+	"github.com/aetherium/aetherium/services/gateway/pkg/integrations"
 )
 
 // Container is a dependency injection container for managing component lifecycle
@@ -27,12 +27,12 @@ type Container struct {
 	integrations map[string]integrations.Integration
 
 	// Factories
-	taskQueueFactory    TaskQueueFactory
-	stateStoreFactory   StateStoreFactory
-	loggerFactory       LoggerFactory
+	taskQueueFactory      TaskQueueFactory
+	stateStoreFactory     StateStoreFactory
+	loggerFactory         LoggerFactory
 	vmOrchestratorFactory VMOrchestratorFactory
-	eventBusFactory     EventBusFactory
-	integrationRegistry *integrations.Registry
+	eventBusFactory       EventBusFactory
+	integrationRegistry   *integrations.Registry
 
 	mu sync.RWMutex
 }
@@ -40,8 +40,8 @@ type Container struct {
 // New creates a new dependency injection container
 func New(cfg *config.Config) *Container {
 	return &Container{
-		config:       cfg,
-		integrations: make(map[string]integrations.Integration),
+		config:              cfg,
+		integrations:        make(map[string]integrations.Integration),
 		integrationRegistry: integrations.NewRegistry(),
 	}
 }
@@ -180,8 +180,18 @@ func (c *Container) initVMOrchestrator(ctx context.Context) error {
 		return fmt.Errorf("VM orchestrator factory not registered")
 	}
 
-	provider := c.config.VMM.Provider
-	providerConfig := c.config.VMM.Config
+	provider := c.config.VMM.DefaultOrchestrator
+	providerConfig := make(map[string]interface{})
+	// Convert VMM config to generic map
+	if provider == "firecracker" {
+		providerConfig["kernel_path"] = c.config.VMM.Firecracker.KernelPath
+		providerConfig["rootfs_template"] = c.config.VMM.Firecracker.RootFSTemplate
+		providerConfig["socket_dir"] = c.config.VMM.Firecracker.SocketDir
+		providerConfig["default_vcpu"] = c.config.VMM.Firecracker.DefaultVCPU
+		providerConfig["default_memory_mb"] = c.config.VMM.Firecracker.DefaultMemoryMB
+	} else if provider == "docker" {
+		providerConfig["network"] = c.config.VMM.Docker.Network
+	}
 
 	orch, err := c.vmOrchestratorFactory.Create(ctx, provider, providerConfig)
 	if err != nil {

@@ -246,7 +246,11 @@ func (m *Manager) CreateTAPDevice(vmID string) (*TAPDevice, error) {
 	}
 
 	// Generate TAP device name
-	tapName := fmt.Sprintf("%s%s", m.config.TapPrefix, vmID[:8])
+	suffix := vmID
+	if len(vmID) > 8 {
+		suffix = vmID[:8]
+	}
+	tapName := fmt.Sprintf("%s%s", m.config.TapPrefix, suffix)
 	if len(tapName) > 15 {
 		tapName = tapName[:15]
 	}

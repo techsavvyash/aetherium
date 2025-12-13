@@ -9,13 +9,17 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Redis    RedisConfig    `yaml:"redis"`
-	Queue    QueueConfig    `yaml:"queue"`
-	VMM      VMMConfig      `yaml:"vmm"`
-	Network  NetworkConfig  `yaml:"network"`
-	Logging  LoggingConfig  `yaml:"logging"`
+	Server       ServerConfig       `yaml:"server"`
+	Database     DatabaseConfig     `yaml:"database"`
+	Redis        RedisConfig        `yaml:"redis"`
+	Queue        QueueConfig        `yaml:"queue"`
+	TaskQueue    TaskQueueConfig    `yaml:"task_queue"`
+	Storage      StorageConfig      `yaml:"storage"`
+	VMM          VMMConfig          `yaml:"vmm"`
+	Network      NetworkConfig      `yaml:"network"`
+	Logging      LoggingConfig      `yaml:"logging"`
+	EventBus     EventBusConfig     `yaml:"event_bus"`
+	Integrations IntegrationsConfig `yaml:"integrations"`
 }
 
 // ServerConfig holds server configuration
@@ -73,11 +77,36 @@ type DockerConfig struct {
 
 // LoggingConfig holds logging configuration
 type LoggingConfig struct {
-	Provider string     `yaml:"provider"` // "stdout", "loki"
-	Level    string     `yaml:"level"`    // "debug", "info", "warn", "error"
-	Format   string     `yaml:"format"`   // "json" or "text"
-	Output   string     `yaml:"output"`   // "stdout", "stderr", or file path
-	Loki     LokiConfig `yaml:"loki"`     // Loki-specific config
+	Provider string            `yaml:"provider"` // "stdout", "loki"
+	Level    string            `yaml:"level"`    // "debug", "info", "warn", "error"
+	Format   string            `yaml:"format"`   // "json" or "text"
+	Output   string            `yaml:"output"`   // "stdout", "stderr", or file path
+	Config   map[string]interface{} `yaml:"config"`   // Provider-specific config
+	Loki     LokiConfig        `yaml:"loki"`     // Loki-specific config
+}
+
+// TaskQueueConfig holds task queue configuration
+type TaskQueueConfig struct {
+	Provider string                 `yaml:"provider"` // "asynq", "memory"
+	Config   map[string]interface{} `yaml:"config"`   // Provider-specific config
+}
+
+// StorageConfig holds storage configuration
+type StorageConfig struct {
+	Provider string                 `yaml:"provider"` // "postgres", "memory"
+	Config   map[string]interface{} `yaml:"config"`   // Provider-specific config
+}
+
+// EventBusConfig holds event bus configuration
+type EventBusConfig struct {
+	Provider string                 `yaml:"provider"` // "redis", "memory"
+	Config   map[string]interface{} `yaml:"config"`   // Provider-specific config
+}
+
+// IntegrationsConfig holds integrations configuration
+type IntegrationsConfig struct {
+	Enabled []string                     `yaml:"enabled"`      // List of enabled integrations
+	Config  map[string]map[string]interface{} `yaml:"config"` // Per-integration config
 }
 
 // LokiConfig holds Loki logging configuration
@@ -280,4 +309,99 @@ func (c *Config) setDefaults() {
 	if c.Network.Proxy.Squid.CacheLog == "" {
 		c.Network.Proxy.Squid.CacheLog = "/var/log/squid/aetherium-cache.log"
 	}
+
+	// Logging provider defaults
+	if c.Logging.Provider == "" {
+		c.Logging.Provider = "stdout"
+	}
+
+	// TaskQueue provider defaults
+	if c.TaskQueue.Provider == "" {
+		c.TaskQueue.Provider = "asynq"
+	}
+	if c.TaskQueue.Config == nil {
+		c.TaskQueue.Config = make(map[string]interface{})
+	}
+
+	// Storage provider defaults
+	if c.Storage.Provider == "" {
+		c.Storage.Provider = "postgres"
+	}
+	if c.Storage.Config == nil {
+		c.Storage.Config = make(map[string]interface{})
+	}
+
+	// EventBus provider defaults
+	if c.EventBus.Provider == "" {
+		c.EventBus.Provider = "redis"
+	}
+	if c.EventBus.Config == nil {
+		c.EventBus.Config = make(map[string]interface{})
+	}
+
+	// Integrations defaults
+	if c.Integrations.Enabled == nil {
+		c.Integrations.Enabled = []string{}
+	}
+	if c.Integrations.Config == nil {
+		c.Integrations.Config = make(map[string]map[string]interface{})
+	}
+}
+
+// GetIntegrationConfig returns the configuration for a specific integration
+func (c *Config) GetIntegrationConfig(name string) (map[string]interface{}, error) {
+	cfg, ok := c.Integrations.Config[name]
+	if !ok {
+		return make(map[string]interface{}), nil // Return empty config if not found
+	}
+	return cfg, nil
+}
+
+// GetIntOrDefault returns an integer value from config with a default fallback
+func GetIntOrDefault(cfg map[string]interface{}, key string, defaultVal int) int {
+	if cfg == nil {
+		return defaultVal
+	}
+	val, ok := cfg[key]
+	if !ok {
+		return defaultVal
+	}
+	if intVal, ok := val.(int); ok {
+		return intVal
+	}
+	// Try to convert from float64 (common in YAML)
+	if floatVal, ok := val.(float64); ok {
+		return int(floatVal)
+	}
+	return defaultVal
+}
+
+// GetBoolOrDefault returns a boolean value from config with a default fallback
+func GetBoolOrDefault(cfg map[string]interface{}, key string, defaultVal bool) bool {
+	if cfg == nil {
+		return defaultVal
+	}
+	val, ok := cfg[key]
+	if !ok {
+		return defaultVal
+	}
+	if boolVal, ok := val.(bool); ok {
+		return boolVal
+	}
+	return defaultVal
+}
+
+// GetStringOrDefault returns a string value from config with a default fallback
+func GetStringOrDefault(cfg map[string]interface{}, key string, defaultVal string) string {
+	if cfg == nil {
+		return defaultVal
+	}
+	val, ok := cfg[key]
+	if !ok {
+		return defaultVal
+	}
+	if strVal, ok := val.(string); ok {
+		return strVal
+	}
+	return defaultVal
 }

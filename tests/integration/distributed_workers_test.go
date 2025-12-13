@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/aetherium/aetherium/services/core/pkg/service"
 	"github.com/aetherium/aetherium/services/core/pkg/storage"
 	"github.com/aetherium/aetherium/services/core/pkg/storage/postgres"
-	"github.com/aetherium/aetherium/services/core/pkg/worker"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Testing Proxy Manager (Disabled Mode) ===\n")
+	fmt.Println("=== Testing Proxy Manager (Disabled Mode) ===")
 
 	// Test 1: Create proxy manager with proxy disabled
 	fmt.Println("Test 1: Creating ProxyManager with proxy disabled...")
@@ -82,7 +82,7 @@ func main() {
 	}
 
 	// Test 8: Test with network manager
-	fmt.Println("\n\n=== Testing Network Manager with Proxy ===\n")
+	fmt.Println("\n\n=== Testing Network Manager with Proxy ===")
 
 	fmt.Println("Test 8: Creating NetworkManager with proxy disabled...")
 	networkConfig := network.NetworkConfig{

@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Testing Proxy Manager (WITH SQUID ENABLED) ===\n")
+	fmt.Println("=== Testing Proxy Manager (WITH SQUID ENABLED) ===")
 
 	// Test 1: Create proxy manager with proxy ENABLED
 	fmt.Println("Test 1: Creating ProxyManager with proxy ENABLED...")
@@ -123,7 +123,7 @@ func main() {
 	}
 
 	// Test 9: Test with NetworkManager
-	fmt.Println("\n\n=== Testing Network Manager Integration ===\n")
+	fmt.Println("\n\n=== Testing Network Manager Integration ===")
 
 	fmt.Println("Test 9: Creating NetworkManager with proxy enabled...")
 	networkConfig := network.NetworkConfig{
@@ -142,7 +142,7 @@ func main() {
 	}
 
 	// Test 10: Service layer testing
-	fmt.Println("\n\n=== Testing Service Layer ===\n")
+	fmt.Println("\n\n=== Testing Service Layer ===")
 
 	fmt.Println("Test 10: Creating ProxyService...")
 	proxyService := service.NewProxyService(netMgr)
